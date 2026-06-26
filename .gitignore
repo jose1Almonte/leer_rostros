@@ -1,6 +1,11 @@
 IMG_20250107_204719.jpg
 IMG_20250107_223234.jpg
 env.py
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
 database/
 yo_1.jpg
 yo_2.jpg
@@ -8,3 +13,11 @@ yo_3.jpg
 yo_4.jpg
 mama_2.png
 vicky_2.jpg
+
+# Fotos personales de prueba (privacidad)
+imagen1.jpeg
+imagen2.jpeg
+*.jpeg
+
+# Repo anidado duplicado accidental
+leer_rostros/

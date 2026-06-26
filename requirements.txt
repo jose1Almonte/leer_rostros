@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic-settings
+boto3
+psycopg[binary]
+psycopg_pool
+pgvector
+numpy
+opencv-python-headless
+deepface
+tf-keras

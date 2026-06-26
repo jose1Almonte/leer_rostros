@@ -1,0 +1,36 @@
+# Despliegue todo-en-uno en un Droplet de DigitalOcean.
+# Levanta Postgres con pgvector + el servicio FastAPI.
+# Las claves de Spaces y MATCH_THRESHOLD se leen del archivo .env.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: rostros
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-cambia_esta_clave}
+      POSTGRES_DB: rostros
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rostros"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    env_file: .env
+    # Conexión interna a la BD del compose; sobrescribe DATABASE_URL del .env.
+    environment:
+      DATABASE_URL: postgresql://rostros:${DB_PASSWORD:-cambia_esta_clave}@db:5432/rostros
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      # Cachea los pesos de DeepFace (~90 MB) entre reinicios.
+      - deepface_weights:/root/.deepface
+
+volumes:
+  pgdata:
+  deepface_weights:
