@@ -55,8 +55,11 @@ def init_db() -> None:
             )
             """
         )
-        # NOTA: no se crea índice ivfflat/hnsw a propósito. Son índices APROXIMADOS
-        # que, con pocos registros, omiten filas y devuelven resultados vacíos.
-        # La búsqueda exacta (seq scan) da recall perfecto y es rápida para este
-        # volumen. Si la tabla crece a >100k filas, evaluar HNSW subiendo recall.
+        # Índice HNSW para búsqueda vectorial rápida a escala (miles/millones de
+        # caras). A diferencia de ivfflat, HNSW da resultados correctos también con
+        # pocos registros (no necesita "entrenamiento") y mantiene alto recall.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS personas_embedding_hnsw "
+            "ON personas USING hnsw (embedding vector_cosine_ops)"
+        )
         conn.commit()

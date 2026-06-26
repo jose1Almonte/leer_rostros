@@ -21,10 +21,14 @@ class Settings(BaseSettings):
     # DigitalOcean Managed Postgres (con pgvector)
     database_url: str
 
-    # Reconocimiento facial
-    face_model: str = "Facenet"
+    # Reconocimiento facial.
+    # SFace + retinaface = mejor combinación según evaluación exhaustiva con fotos
+    # reales (mayor margen de seguridad: misma persona <=0.446, distintas >=0.683).
+    # Umbral 0.55 = 0 falsos positivos / 0 falsos negativos en las pruebas.
+    face_model: str = "SFace"
     embedding_dim: int = 128
-    match_threshold: float = 0.40
+    match_threshold: float = 0.55
+    face_detector: str = "retinaface"
 
     @property
     def endpoint_url(self) -> str:

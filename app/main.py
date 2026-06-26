@@ -25,6 +25,7 @@ CONTENT_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 async def lifespan(app: FastAPI):
     init_db()
     get_pool()  # abre el pool al arrancar
+    faces.warmup()  # pre-carga modelo + detector (evita cold start en la 1ª búsqueda)
     yield
     close_pool()
 
