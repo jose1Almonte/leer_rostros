@@ -17,7 +17,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Correr tests
+        env:
+          # Los tests de unit/domain y repositories no pegan contra la DB real,
+          # pero igual pasamos defaults seguros por si algún fixture los usa.
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+        run: |
+          python -m pytest tests/ -v --tb=short
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
