@@ -1,4 +1,11 @@
-"""Subida de imágenes a DigitalOcean Spaces (almacenamiento compatible con S3)."""
+"""Almacenamiento de imágenes.
+
+Por defecto guarda en el disco local del contenedor (cero configuración) y las
+sirve en `/fotos/...`. Si se configuran las claves de Spaces, usa DigitalOcean
+Spaces (S3) y devuelve la URL pública.
+"""
+
+import os
 
 import boto3
 from botocore.client import Config
@@ -19,18 +26,29 @@ def _client():
 
 
 def upload_image(data: bytes, key: str, content_type: str = "image/jpeg") -> str:
-    """Sube los bytes al Space con acceso público de lectura y devuelve su URL."""
+    """Guarda la imagen y devuelve su URL (Spaces o local /fotos/...)."""
     s = get_settings()
-    _client().put_object(
-        Bucket=s.spaces_bucket,
-        Key=key,
-        Body=data,
-        ContentType=content_type,
-        ACL="public-read",
-    )
-    return f"{s.public_base_url}/{key}"
+    if s.usa_spaces:
+        _client().put_object(
+            Bucket=s.spaces_bucket, Key=key, Body=data,
+            ContentType=content_type, ACL="public-read",
+        )
+        return f"{s.public_base_url}/{key}"
+
+    # Almacenamiento local (por defecto)
+    path = os.path.join(s.local_storage_dir, key)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+    return f"/fotos/{key}"
 
 
 def delete_image(key: str) -> None:
     s = get_settings()
-    _client().delete_object(Bucket=s.spaces_bucket, Key=key)
+    if s.usa_spaces:
+        _client().delete_object(Bucket=s.spaces_bucket, Key=key)
+    else:
+        try:
+            os.remove(os.path.join(s.local_storage_dir, key))
+        except FileNotFoundError:
+            pass

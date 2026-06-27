@@ -1,0 +1,37 @@
+# Imagen ALL-IN-ONE: Postgres+pgvector + API (FastAPI/DeepFace) + nginx + frontend,
+# TODO dentro de una sola imagen. Cero configuración: corre con
+#   docker run -d -p 80:80 -v rostros-data:/data <imagen>
+# Mover de VPS = mover esta imagen. No hace falta .env ni nada más.
+FROM pgvector/pgvector:pg16
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    DEEPFACE_HOME=/app/weights \
+    LOCAL_STORAGE_DIR=/data/fotos \
+    DATABASE_URL=postgresql://rostros:rostros@127.0.0.1:5432/rostros \
+    TF_CPP_MIN_LOG_LEVEL=3 \
+    TF_ENABLE_ONEDNN_OPTS=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-venv python3-pip nginx supervisor libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/requirements.txt
+RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
+
+COPY app /app/app
+COPY frontend /var/www/html
+COPY docker/standalone/nginx.conf /etc/nginx/sites-available/default
+COPY docker/standalone/supervisord.conf /etc/supervisord.conf
+COPY docker/standalone/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Pre-descarga los pesos del modelo DENTRO de la imagen (arranque instantáneo).
+RUN /venv/bin/python -c "import numpy as np; from deepface import DeepFace; \
+    DeepFace.represent(img_path=np.zeros((320,320,3),dtype='uint8'), model_name='Facenet512', \
+    detector_backend='retinaface', enforce_detection=False)" \
+    || echo "(los pesos se descargarán en el primer arranque)"
+
+WORKDIR /app
+EXPOSE 80
+VOLUME /data
+ENTRYPOINT ["/entrypoint.sh"]

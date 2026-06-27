@@ -10,16 +10,23 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    # DigitalOcean Spaces (compatible con S3)
-    spaces_key: str
-    spaces_secret: str
+    # Almacenamiento de imágenes.
+    # Por defecto: LOCAL (carpeta del contenedor) -> cero configuración.
+    # Si defines SPACES_KEY/SECRET/BUCKET, usa DigitalOcean Spaces (S3).
+    spaces_key: str = ""
+    spaces_secret: str = ""
     spaces_region: str = "nyc3"
-    spaces_bucket: str
+    spaces_bucket: str = ""
     spaces_endpoint: str | None = None
     spaces_cdn_endpoint: str | None = None
+    local_storage_dir: str = "/data/fotos"
 
-    # DigitalOcean Managed Postgres (con pgvector)
-    database_url: str
+    # Base de datos. Por defecto apunta al Postgres incluido en la imagen.
+    database_url: str = "postgresql://rostros:rostros@localhost:5432/rostros"
+
+    @property
+    def usa_spaces(self) -> bool:
+        return bool(self.spaces_key and self.spaces_secret and self.spaces_bucket)
 
     # Reconocimiento facial.
     # Facenet512 + retinaface = mejor combinación según benchmark a escala (LFW
