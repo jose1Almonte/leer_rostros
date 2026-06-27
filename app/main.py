@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
 # psycopg (database) ANTES que faces (TensorFlow) para evitar crash nativo.
 from app.config import get_settings
@@ -372,6 +373,17 @@ app = FastAPI(
     version="2.1.0",
     openapi_tags=tags,
     lifespan=lifespan,
+)
+
+# CORS abierto a TODOS los orígenes (de prueba). Cualquier front (vzlaencuentra.com,
+# localhost, etc.) puede consumir la API. La auth admin va por header Bearer (JWT),
+# por eso allow_credentials=False es compatible con allow_origins=["*"].
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
