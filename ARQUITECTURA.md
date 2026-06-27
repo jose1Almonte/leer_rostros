@@ -73,19 +73,40 @@ app/
   auth.py              # JWT + bcrypt + guard get_current_admin
   cli.py               # gestión de admins (create / password / list / activate)
   schemas.py           # modelos Pydantic (LoginBody, Candidato, AlertaFamiliar, …)
-  domain/              # ⭐ nueva capa: lógica de dominio pura, sin SQL ni HTTP
+  domain/              # capa: lógica de dominio pura, sin SQL ni HTTP
     __init__.py        #   barrel
     matching.py        #   MatchingPolicy (is_match, confidence_band, match_percentage)
     privacy.py         #   MenoresPrivacy (mask de nombres de menores)
     persona.py         #   Estado enum, Foto dataclass, PersonaBase model
-  repositories/        # ⭐ nueva capa: toda la SQL del modelo
+  repositories/        # capa: toda la SQL del modelo
     __init__.py        #   barrel
     persona.py         #   PersonaRepository: SQL de personas + persona_embeddings
+  use_cases/           # ⭐ capa: una clase por flujo de negocio
+    __init__.py        #   barrel (re-exporta las 6 clases)
+    _exceptions.py     #   excepciones de dominio (PersonaValidationError, …)
+    _helpers.py        #   LIMITE_MAX, _gen_codigo, _embedding_consulta
+    registrar_busqueda.py     #   POST /buscados (FAMILIAR)
+    registrar_encontrado.py   #   POST /encontrados (RESCATISTA) + alerta
+    buscar_admin.py           #   POST /buscar (ADMIN)
+    listar_personas_admin.py  #   GET /admin/personas
+    moderar_persona.py        #   PATCH …/moderacion
+    eliminar_persona.py       #   DELETE …/{person_id}
 tests/
   conftest.py          # fixtures: client, policy, admin_token, admin_headers
   domain/
     test_matching.py   # 14 tests, 100% coverage
     test_privacy.py    # 8 tests, 100% coverage
+  use_cases/           # ⭐ tests de la capa use_cases (46 tests)
+    __init__.py
+    test_registrar_busqueda.py
+    test_registrar_encontrado.py
+    test_buscar_admin.py
+    test_listar_personas_admin.py
+    test_moderar_persona.py
+    test_eliminar_persona.py
+  repositories/        # fake in-memory del repo, solo para tests
+    __init__.py
+    fake.py            #   FakePersonaRepository (test-only)
 ```
 
 ### 3.1 Domain layer (`app/domain/`)
@@ -125,6 +146,54 @@ Los métodos de mapeo `_row_to_candidato_dict` / `_row_to_admin_dict` calculan
 `coincidencia` y `confianza` a través del `MatchingPolicy` inyectado. **No**
 aplican privacidad: `MenoresPrivacy` se invoca en el handler del endpoint.
 
+### 3.3 Use case layer (`app/use_cases/`)
+
+Una clase por flujo de negocio. Los endpoints de `app/main.py` se vuelven
+**adaptadores HTTP delgados** (≤20 líneas): parsean form / query / path,
+llaman a `use_case.execute(...)`, y devuelven el modelo Pydantic. La
+orquestación (validación, construcción de `PersonaBase`, llamadas al repo,
+aplicación de `MenoresPrivacy`, ensamblado de la respuesta) vive en el use case.
+
+| Use case | Endpoint | Responsabilidad |
+|---|---|---|
+| `RegistrarBusqueda` | `POST /buscados` | valida form, arma `PersonaBase` (`estado=BUSCADA`, `moderacion="aprobada"`), `repo.add`, busca en `encontrada`, aplica `MenoresPrivacy` y devuelve `ResultadoBusqueda` |
+| `RegistrarEncontrado` | `POST /encontrados` | valida form (4 reglas, incluyendo `es_menor ⇒ doc_responsable` obligatorio), arma `PersonaBase` (`estado=ENCONTRADA`, `moderacion="pendiente"`), `repo.add`, **construye la `AlertaFamiliar` cross-flow** si hay match, aplica `MenoresPrivacy` y devuelve `ResultadoRegistro` |
+| `BuscarAdmin` | `POST /buscar` | clamp de `limite`, `repo.search_admin`, aplica `MenoresPrivacy`, devuelve `list[Candidato]` |
+| `ListarPersonasAdmin` | `GET /admin/personas` | `repo.list_admin`, aplica `MenoresPrivacy`, devuelve `list[PersonaAdmin]` |
+| `ModerarPersona` | `PATCH /admin/personas/{id}/moderacion` | valida `valor ∈ {aprobada, rechazada, pendiente}`, `repo.set_moderacion`, devuelve `{person_id, moderacion, fotos_actualizadas}` |
+| `EliminarPersona` | `DELETE /admin/personas/{person_id}` | `repo.delete`, devuelve `{person_id, eliminada, fotos}` |
+
+`admin_login` (`POST /admin/login`) y `GET /health` se quedan **en `app/main.py`**
+por decisión explícita (no tocan `PersonaRepository`; extraerlos no aporta).
+
+**Excepciones de dominio.** El módulo `_exceptions.py` define 4 excepciones que
+los use cases elevan; el helper `_use_case_execute` en `app/main.py` las mapea
+a HTTP en el endpoint:
+
+| Excepción | HTTP |
+|---|---|
+| `PersonaValidationError` | 422 |
+| `RostroNoDetectadoError` | 422 |
+| `PersonaNotFoundError` | 404 (mensaje por defecto: *"No existe esa persona"*) |
+| `ModificacionInvalidaError` | 400 |
+
+Los use cases **nunca** importan `HTTPException` ni `fastapi`; la capa HTTP
+queda afuera del negocio.
+
+**PersonaBase fluye por el sistema.** `PersonaRepository.add(...)` ahora recibe
+un `PersonaBase` (modelo Pydantic de `app/domain/persona.py`) en vez de un
+`dict[str, Any]`. El repo mapea internamente los campos a los nombres de
+parámetro SQL (`persona.es_menor → %(menor)s`, `persona.telefono_contacto →
+%(tel_contacto)s`, etc.). Los endpoints ya no construyen el `datos` en español
+a mano: lo arma el use case.
+
+**Testeable sin InsightFace ni PostgreSQL.** `tests/repositories/fake.py`
+provee `FakePersonaRepository`, una implementación in-memory que respeta la
+misma interfaz pública que el repo real (`add`, `search_by_estado`,
+`search_admin`, `list_admin`, `set_moderacion`, `delete`). Es **solo** para
+tests — el código de `app/` no la importa. La cobertura de
+`app/use_cases/` es **100%** y los tests corren en milisegundos.
+
 ---
 
 ## 4. Flujos de datos
@@ -132,6 +201,10 @@ aplican privacidad: `MenoresPrivacy` se invoca en el handler del endpoint.
 Hay **dos flujos** que se cruzan cuando hay match, más los endpoints de **admin**.
 El sistema prioriza la **protección de menores** y la **moderación** antes de
 exponer cualquier coincidencia públicamente.
+
+> Los pasos que siguen describen la orquestación completa, que vive en la clase
+> del use case correspondiente (ver §3.3). El endpoint HTTP solo parsea el
+> request, llama a `use_case.execute(...)` y devuelve el modelo Pydantic.
 
 ### 4.1 FAMILIAR — `POST /buscados`
 
@@ -200,10 +273,10 @@ aplica a **todas** las respuestas regulares (públicas y admin):
 
 | Endpoint | Aplica privacidad | Fuente |
 |---|---|---|
-| `POST /buscados` (FAMILIAR) | sí | `MenoresPrivacy(Candidato)` en `main.py` |
-| `POST /encontrados` (RESCATISTA) | sí — `AlertaFamiliar.familiar_nombre` | `MenoresPrivacy(AlertaFamiliar)` |
-| `POST /buscar` (ADMIN) | sí | `MenoresPrivacy(Candidato)` |
-| `GET /admin/personas` (ADMIN) | sí | `MenoresPrivacy(PersonaAdmin)` |
+| `POST /buscados` (FAMILIAR) | sí | `MenoresPrivacy(Candidato)` en `RegistrarBusqueda.execute()` |
+| `POST /encontrados` (RESCATISTA) | sí — `AlertaFamiliar.familiar_nombre` | `MenoresPrivacy(AlertaFamiliar)` en `RegistrarEncontrado.execute()` |
+| `POST /buscar` (ADMIN) | sí | `MenoresPrivacy(Candidato)` en `BuscarAdmin.execute()` |
+| `GET /admin/personas` (ADMIN) | sí | `MenoresPrivacy(PersonaAdmin)` en `ListarPersonasAdmin.execute()` |
 
 Los nombres reales de menores **sí se guardan** en la BD; el control se hace
 por acceso (quién tiene cuenta admin activa) y por enmascaramiento en serialización.
@@ -371,12 +444,22 @@ app/
   auth.py              # JWT + bcrypt + guard get_current_admin
   cli.py               # gestión de admins
   schemas.py           # Pydantic: LoginBody, Candidato, AlertaFamiliar, …
-  domain/              # ⭐ lógica de dominio pura
+  domain/              # lógica de dominio pura
     matching.py
     privacy.py
     persona.py
-  repositories/        # ⭐ toda la SQL de personas / persona_embeddings
+  repositories/        # toda la SQL de personas / persona_embeddings
     persona.py
+  use_cases/           # ⭐ una clase por flujo de negocio (ver §3.3)
+    __init__.py        #   barrel
+    _exceptions.py     #   excepciones de dominio
+    _helpers.py        #   LIMITE_MAX, _gen_codigo, _embedding_consulta
+    registrar_busqueda.py
+    registrar_encontrado.py
+    buscar_admin.py
+    listar_personas_admin.py
+    moderar_persona.py
+    eliminar_persona.py
 frontend/
   index.html           # SPA single-file (3 pestañas)
 tests/
@@ -384,17 +467,30 @@ tests/
   domain/
     test_matching.py   # 14 tests
     test_privacy.py    # 8 tests
+  use_cases/           # ⭐ 46 tests sobre la capa de use cases
+    __init__.py
+    test_registrar_busqueda.py
+    test_registrar_encontrado.py
+    test_buscar_admin.py
+    test_listar_personas_admin.py
+    test_moderar_persona.py
+    test_eliminar_persona.py
+  repositories/        # fake in-memory del repo (test-only)
+    __init__.py
+    fake.py
 openspec/
   changes/             # cambios activos + change artifacts
-    core-domain/       # (este change, listo para archivar)
+    use-case/          # change vigente (próximo a archivar)
       proposal.md
-      specs/core-domain/spec.md
+      specs/use-case/spec.md
       design.md
       tasks.md
       verify-report.md
+      apply-progress.md
       sync-report.md
   specs/               # ⭐ specs canónicas (sync target)
     core-domain/spec.md
+    use-case/spec.md
   config.yaml          # configuración del flujo SDD
 evaluate.py            # benchmark 5 modelos × 3 detectores
 benchmark_lfw.py       # benchmark LFW
@@ -416,13 +512,28 @@ CLAUDE.md / AGENTS.md  # guía para colaboradores
 ## 12. Tests
 
 - **Runner**: `pytest` (no strict TDD; tests junto al código).
-- **Cobertura de dominio**: **100%** (62/62 statements en `app/domain/`).
-- **Tests añadidos en este change**: 22 totales
+- **Cobertura**:
+  - `app/domain/` — **100%** (62/62 statements) — preservado.
+  - `app/use_cases/` — **100%** (136/136 statements en las 6 clases + helpers +
+    exceptions + barrel).
+  - `app/repositories/` — 28% (cubre el fake; tests de integración con
+    PostgreSQL + pgvector reales diferidos).
+- **Tests acumulados** (68 totales):
   - `tests/domain/test_matching.py` — 14 tests (umbral, bandas, sigmoide).
   - `tests/domain/test_privacy.py` — 8 tests (mask Candidato, PersonaAdmin, AlertaFamiliar).
+  - `tests/use_cases/test_registrar_busqueda.py` — 13 tests (FAMILIAR).
+  - `tests/use_cases/test_registrar_encontrado.py` — 12 tests (RESCATISTA + alerta).
+  - `tests/use_cases/test_buscar_admin.py` — 5 tests (admin search).
+  - `tests/use_cases/test_listar_personas_admin.py` — 6 tests (admin list).
+  - `tests/use_cases/test_moderar_persona.py` — 6 tests (moderación).
+  - `tests/use_cases/test_eliminar_persona.py` — 4 tests (delete).
+- **Fake in-memory** en `tests/repositories/fake.py` (`FakePersonaRepository`):
+  implementa la misma interfaz pública que el repo real. **Test-only**;
+  el código de `app/` nunca la importa. Permite que los use-case tests
+  corran en milisegundos, sin InsightFace ni PostgreSQL.
 - **Fixtures clave** en `tests/conftest.py`:
   - `client` (TestClient de FastAPI, sin levantar lifespan).
   - `policy` (MatchingPolicy con `threshold=0.55`).
   - `admin_token` / `admin_headers` (Bearer token para endpoints de admin).
-- **Gap conocido**: tests de `app/repositories/` al 0% (requieren PostgreSQL +
-  pgvector reales; diferido a futuro).
+- **Gap conocido**: tests de integración del `PersonaRepository` real
+  requieren PostgreSQL + pgvector corriendo; diferido a un cambio futuro.
