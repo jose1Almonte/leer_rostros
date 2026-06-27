@@ -140,13 +140,21 @@ const API="/api";
 const $=id=>document.getElementById(id);
 let ADMIN_TOKEN="";
 function H(){return ADMIN_TOKEN?{Authorization:"Bearer "+ADMIN_TOKEN}:{}}
+const HTML_ESCAPE={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"};
+function esc(v){return String(v??"").replace(/[&<>"']/g,ch=>HTML_ESCAPE[ch])}
+function field(v,fallback="&mdash;"){const s=String(v??"").trim();return s?esc(s):fallback}
+function imgSrc(v){const s=String(v??"").trim();return s.startsWith("/fotos/")||s.startsWith("https://")||s.startsWith("http://")?esc(s):""}
+function conf(v){return v==="alta"||v==="media"?v:"baja"}
+function num(v,fallback=0){const n=Number(v);return Number.isFinite(n)?n:fallback}
+function uuid(v){const s=String(v??"");return /^[0-9a-fA-F-]{36}$/.test(s)?s:""}
+function personTitle(p,label="Menor protegido"){if(p.es_menor)return `<i>${esc(label)}</i>`;const s=((p.nombre||"")+" "+(p.apellido||"")).trim();return s?esc(s):"<i>sin nombre</i>"}
 async function adminLogin(){
   const res=$("adm_loginres");res.textContent="Entrando...";
   try{const r=await fetch(API+"/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({usuario:$("adm_user").value,password:$("adm_pass").value})});
     const d=await r.json();if(!r.ok)throw new Error(d.detail||"Error");
     ADMIN_TOKEN=d.token;$("loginCard").style.display="none";$("adminPanel").style.display="block";
-  }catch(e){res.innerHTML='<span class="badge no">'+e.message+'</span>'}
+  }catch(e){res.innerHTML='<span class="badge no">'+esc(e.message||"Error")+'</span>'}
 }
 window.addEventListener("DOMContentLoaded",()=>$("adm_login").addEventListener("click",adminLogin));
 function preview(inp,img){$(inp).addEventListener("change",()=>{if($(inp).files[0]){$(img).src=URL.createObjectURL($(inp).files[0]);$(img).style.display="block"}})}
@@ -163,17 +171,18 @@ $("r_menor").addEventListener("change",e=>{
   $("r_adulto").style.display=e.target.checked?"none":"block";
 });
 
-function badge(c){return c.confianza==="alta"?'<span class="badge ok">ALTA</span>':c.confianza==="media"?'<span class="badge media">MEDIA</span>':'<span class="badge no">baja</span>'}
+function badge(c){const nivel=conf(c.confianza);return nivel==="alta"?'<span class="badge ok">ALTA</span>':nivel==="media"?'<span class="badge media">MEDIA</span>':'<span class="badge no">baja</span>'}
 function candHTML(c,i){
-  const titulo=c.es_menor?'<i>Menor protegido</i>':((c.nombre||'')+' '+(c.apellido||'')).trim()||'<i>sin nombre</i>';
+  const titulo=personTitle(c);
+  const revealId="rev"+num(i);
   return `<div class="match">
-    <img src="${c.image_url}" onerror="this.style.opacity=.3">
+    <img src="${imgSrc(c.image_url)}" onerror="this.style.opacity=.3">
     <div style="flex:1">
-      <span class="pct">${c.coincidencia}%</span> ${badge(c)}
-      <div>${titulo} ${c.edad?'· '+c.edad+' años':''}</div>
-      <div class="dim">Refugio: ${c.refugio||'—'} · distancia ${c.distancia}</div>
-      <button class="esmifam" onclick="document.getElementById('rev${i}').style.display='block'">Es mi familiar</button>
-      <div class="reveal" id="rev${i}">📍 Ubicación: <b>${c.ubicacion||'—'}</b><br>📞 Teléfono: <b>${c.telefono||'—'}</b></div>
+      <span class="pct">${num(c.coincidencia)}%</span> ${badge(c)}
+      <div>${titulo} ${c.edad?'&middot; '+field(c.edad)+' a&ntilde;os':''}</div>
+      <div class="dim">Refugio: ${field(c.refugio)} &middot; distancia ${field(c.distancia)}</div>
+      <button class="esmifam" onclick="document.getElementById('${revealId}').style.display='block'">Es mi familiar</button>
+      <div class="reveal" id="${revealId}">Ubicaci&oacute;n: <b>${field(c.ubicacion)}</b><br>Tel&eacute;fono: <b>${field(c.telefono)}</b></div>
     </div></div>`;
 }
 
@@ -188,9 +197,10 @@ $("f_btn").addEventListener("click",async()=>{
   fd.append("limite",$("f_limite").value);
   try{const r=await fetch(API+"/buscados",{method:"POST",body:fd});const d=await r.json();
     if(!r.ok)throw new Error(d.detail||"Error");
-    res.innerHTML=`<p class="dim">Búsqueda registrada (código <b>${d.codigo}</b>) · ${d.total} candidatos:</p>`+
-      (d.coincidencias.length?d.coincidencias.map(candHTML).join(""):'<span>Aún no hay encontrados que coincidan.</span>');
-  }catch(e){res.innerHTML='<span class="badge no">Error</span> '+e.message}finally{b.disabled=false}
+    const coincidencias=Array.isArray(d.coincidencias)?d.coincidencias:[];
+    res.innerHTML=`<p class="dim">B&uacute;squeda registrada (c&oacute;digo <b>${field(d.codigo,"")}</b>) &middot; ${num(d.total)} candidatos:</p>`+
+      (coincidencias.length?coincidencias.map(candHTML).join(""):'<span>A&uacute;n no hay encontrados que coincidan.</span>');
+  }catch(e){res.innerHTML='<span class="badge no">Error</span> '+esc(e.message||"Error")}finally{b.disabled=false}
 });
 
 $("r_btn").addEventListener("click",async()=>{
@@ -205,12 +215,12 @@ $("r_btn").addEventListener("click",async()=>{
   else{fd.append("doc_responsable",$("r_docresp").value);fd.append("descripcion",$("r_desc").value);}
   try{const r=await fetch(API+"/encontrados",{method:"POST",body:fd});const d=await r.json();
     if(!r.ok)throw new Error(d.detail||"Error");
-    let h=`<div class="alerta" style="background:rgba(46,204,113,.12);border-color:var(--ok)">✅ Registrado. Código: <b>${d.codigo}</b></div>`;
-    if(d.alerta){h+=`<div class="alerta">🔔 <b>¡Un familiar ya buscaba a esta persona!</b> (${d.alerta.coincidencia}% ${d.alerta.confianza})<br>
-      👤 ${d.alerta.familiar_nombre||'(sin nombre)'} · 📞 ${d.alerta.familiar_telefono||'—'}
-      <div><img src="${d.alerta.image_url}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;margin-top:6px"></div></div>`;}
+    let h=`<div class="alerta" style="background:rgba(46,204,113,.12);border-color:var(--ok)">Registrado. C&oacute;digo: <b>${field(d.codigo,"")}</b></div>`;
+    if(d.alerta){h+=`<div class="alerta"><b>&iexcl;Un familiar ya buscaba a esta persona!</b> (${num(d.alerta.coincidencia)}% ${field(conf(d.alerta.confianza))})<br>
+      ${field(d.alerta.familiar_nombre,"(sin nombre)")} &middot; ${field(d.alerta.familiar_telefono)}
+      <div><img src="${imgSrc(d.alerta.image_url)}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;margin-top:6px"></div></div>`;}
     res.innerHTML=h;
-  }catch(e){res.innerHTML='<span class="badge no">Error</span> '+e.message}finally{b.disabled=false}
+  }catch(e){res.innerHTML='<span class="badge no">Error</span> '+esc(e.message||"Error")}finally{b.disabled=false}
 });
 
 $("a_btn").addEventListener("click",async()=>{
@@ -220,29 +230,31 @@ $("a_btn").addEventListener("click",async()=>{
   const fd=new FormData();fd.append("file",f);fd.append("limite",$("a_limite").value);fd.append("estado",$("a_estado").value);
   try{const r=await fetch(API+"/buscar",{method:"POST",body:fd,headers:H()});const d=await r.json();
     if(!r.ok)throw new Error(d.detail||"Error");
-    res.innerHTML=`<p class="dim">${d.length} resultados:</p>`+d.map((c,i)=>`<div class="match">
-      <img src="${c.image_url}" onerror="this.style.opacity=.3">
-      <div style="flex:1"><span class="pct">${c.coincidencia}%</span> ${badge(c)} <span class="dim">[${c.estado}]</span>
-      <div>${c.es_menor?'<i>Menor</i>':((c.nombre||'')+' '+(c.apellido||'')).trim()||'<i>sin nombre</i>'}</div>
-      <div class="dim">Refugio: ${c.refugio||'—'} · 📞 ${c.telefono||'—'} · dist ${c.distancia}</div></div></div>`).join("");
-  }catch(e){res.innerHTML='<span class="badge no">Error</span> '+e.message}finally{b.disabled=false}
+    const resultados=Array.isArray(d)?d:[];
+    res.innerHTML=`<p class="dim">${resultados.length} resultados:</p>`+resultados.map(c=>`<div class="match">
+      <img src="${imgSrc(c.image_url)}" onerror="this.style.opacity=.3">
+      <div style="flex:1"><span class="pct">${num(c.coincidencia)}%</span> ${badge(c)} <span class="dim">[${field(c.estado,"")}]</span>
+      <div>${personTitle(c,"Menor")}</div>
+      <div class="dim">Refugio: ${field(c.refugio)} &middot; Tel&eacute;fono: ${field(c.telefono)} &middot; dist ${field(c.distancia)}</div></div></div>`).join("");
+  }catch(e){res.innerHTML='<span class="badge no">Error</span> '+esc(e.message||"Error")}finally{b.disabled=false}
 });
 
 async function cargarModeracion(){
   const res=$("m_res");res.textContent="Cargando...";
-  const q=$("m_filtro").value?("?moderacion="+$("m_filtro").value):"";
+  const q=$("m_filtro").value?("?moderacion="+encodeURIComponent($("m_filtro").value)):"";
   const d=await (await fetch(API+"/admin/personas"+q,{headers:H()})).json();
   if(!d.length){res.innerHTML='<span class="empty">Sin publicaciones.</span>';return}
   res.innerHTML=d.map(p=>{
-    const t=p.es_menor?'<i>Menor protegido</i>':((p.nombre||'')+' '+(p.apellido||'')).trim()||'<i>sin nombre</i>';
+    const t=personTitle(p);
     const mb=p.moderacion==='aprobada'?'<span class="badge ok">aprobada</span>':p.moderacion==='rechazada'?'<span class="badge no">rechazada</span>':'<span class="badge media">pendiente</span>';
-    return `<div class="match"><img src="${p.fotos[0]}" onerror="this.style.opacity=.3">
-      <div style="flex:1"><div>${t} ${mb} <span class="dim">[${p.estado}]</span></div>
-      <div class="dim">Refugio: ${p.refugio||'—'} · ${p.codigo||''}</div>
+    const personId=uuid(p.person_id);
+    return `<div class="match"><img src="${imgSrc((p.fotos||[])[0])}" onerror="this.style.opacity=.3">
+      <div style="flex:1"><div>${t} ${mb} <span class="dim">[${field(p.estado,"")}]</span></div>
+      <div class="dim">Refugio: ${field(p.refugio)} &middot; ${field(p.codigo,"")}</div>
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
-        <button class="esmifam" onclick="moderar('${p.person_id}','aprobada')">✓ Aprobar</button>
-        <button class="esmifam" style="background:#f1c40f" onclick="moderar('${p.person_id}','rechazada')">⊘ Rechazar</button>
-        <button class="esmifam" style="background:var(--bad);color:#fff" onclick="eliminar('${p.person_id}')">🗑 Eliminar</button>
+        <button class="esmifam" onclick="moderar('${personId}','aprobada')">Aprobar</button>
+        <button class="esmifam" style="background:#f1c40f" onclick="moderar('${personId}','rechazada')">Rechazar</button>
+        <button class="esmifam" style="background:var(--bad);color:#fff" onclick="eliminar('${personId}')">Eliminar</button>
       </div></div></div>`;
   }).join("");
 }
