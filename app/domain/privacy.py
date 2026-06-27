@@ -7,15 +7,34 @@ from app.schemas import AlertaFamiliar, Candidato, PersonaAdmin
 T = TypeVar("T", Candidato, PersonaAdmin, AlertaFamiliar)
 
 
+# % mínimo de coincidencia para mostrar los datos de un MENOR en una búsqueda.
+# Por debajo de esto el match no es suficientemente confiable → se ocultan sus datos.
+MENOR_MIN_COINCIDENCIA = 20
+
+
 def MenoresPrivacy(obj: T) -> T:
-    """Passthrough: ya NO se enmascara el nombre de los menores.
+    """Protege los datos de MENORES según la confianza del match.
 
-    Decisión de producto (catástrofe / reunificación): para un niño encontrado se
-    MUESTRA su nombre/apellido si se conocen (o `null` → el front muestra "Sin nombre
-    registrado"). `es_menor` queda solo como etiqueta informativa para la UI.
+    Reglas (solo si `es_menor` es True):
+      - PersonaAdmin (vista admin): el admin SIEMPRE ve los datos reales.
+      - Candidato / AlertaFamiliar (resultados de búsqueda):
+          * coincidencia >= 20 %  → se muestran nombre/apellido del menor.
+          * coincidencia <  20 %  → se ocultan (nombre/apellido = None;
+            para AlertaFamiliar, familiar_nombre = None).
 
-    Se mantiene la función (y su uso en los endpoints) por compatibilidad; devuelve
-    el objeto sin cambios. Si en el futuro se quiere volver a ocultar menores, basta
-    con reintroducir el enmascarado aquí.
+    Adultos: nunca se enmascara. El objeto original no se muta (devuelve copia).
     """
-    return obj
+    if not getattr(obj, "es_menor", False):
+        return obj
+
+    # El admin ve todo (la vista admin no trae % de coincidencia).
+    if isinstance(obj, PersonaAdmin):
+        return obj
+
+    coincidencia = getattr(obj, "coincidencia", 0) or 0
+    if coincidencia >= MENOR_MIN_COINCIDENCIA:
+        return obj  # match confiable → se muestran los datos del menor
+
+    if isinstance(obj, AlertaFamiliar):
+        return obj.model_copy(update={"familiar_nombre": None})
+    return obj.model_copy(update={"nombre": None, "apellido": None})

@@ -242,10 +242,11 @@ una **alerta** con el nombre y teléfono del familiar.
 | `doc_responsable` | texto | **Sí si `es_menor`** | `V-11111111` |
 | `descripcion` | texto | no | `cabello castaño, 1.20 m` |
 
-> **Menores:** `es_menor=true` es solo una **etiqueta** (para marcar al niño en la UI). El
-> `nombre`/`apellido` **SÍ se guardan y se muestran** si se conocen; si no, llegan como
-> `null` y el front muestra *"Sin nombre registrado"*. Cada encontrado expone además
-> **`encontrado_por`** (quién lo halló) y su **teléfono** de contacto.
+> **Menores:** `es_menor=true` marca al niño. Sus datos se **guardan** siempre, pero en
+> las **búsquedas** se protegen según la confianza del match: si la `coincidencia` del
+> resultado es **≥ 20 %** se muestran `nombre`/`apellido`; si es **< 20 %** llegan como
+> `null` (front: *"Sin nombre registrado"*). El **admin** siempre ve los datos reales.
+> Cada encontrado expone además **`encontrado_por`** (quién lo halló) y su **teléfono**.
 
 ### 🚩 REPORTES (público)
 - `POST /reportes/falla` — reportar un bug/falla de la página (JSON: `descripcion`, `url?`, `contacto?`).
