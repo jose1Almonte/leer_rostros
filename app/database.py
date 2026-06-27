@@ -57,9 +57,10 @@ def close_pool() -> None:
 
 def init_db() -> None:
     s = get_settings()
-    with psycopg.connect(s.database_url) as conn:
+    with psycopg.connect(s.database_url, autocommit=True) as conn:
+        # Lock: evita que varios workers choquen al crear extensión/tabla a la vez.
+        conn.execute("SELECT pg_advisory_lock(927138)")
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        conn.commit()
         register_vector(conn)
         conn.execute(
             f"""
@@ -83,4 +84,4 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS personas_embedding_hnsw "
             "ON personas USING hnsw (embedding vector_cosine_ops)"
         )
-        conn.commit()
+        conn.execute("SELECT pg_advisory_unlock(927138)")

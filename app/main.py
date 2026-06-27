@@ -129,7 +129,14 @@ def _fila_a_candidato(r) -> Candidato:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    try:
+        init_db()
+    except Exception:
+        # Otro worker ganó la carrera de creación de esquema; al reintentar ya existe.
+        try:
+            init_db()
+        except Exception:
+            pass
     get_pool()
     faces.warmup()
     yield
