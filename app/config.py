@@ -33,26 +33,42 @@ class Settings(BaseSettings):
     # con augmentación masiva de ángulo: ideal para fotos de rescate (3/4, perfil).
     # Cada foto registrada genera además augmentaciones por rotación (±15°).
     embedding_dim: int = 512
-    match_threshold: float = 0.55            # distancia coseno por debajo = coincidencia
-    min_face_quality: float = 0.50           # det_score mínimo de InsightFace (0–1)
-    confidence_sigmoid_k: float = 12.0       # pendiente de la curva de confianza
+    match_threshold: float = 0.55  # distancia coseno por debajo = coincidencia
+    min_face_quality: float = 0.50  # det_score mínimo de InsightFace (0–1)
+    confidence_sigmoid_k: float = 12.0  # pendiente de la curva de confianza
     confidence_sigmoid_midpoint: float = 0.40  # distancia donde la confianza = 50 %
 
-    # Superadmin (cámbiala con ADMIN_PASSWORD en producción).
+    # Superadmin — BOOTSTRAP únicamente.
+    # `admin_user` / `admin_password` SÓLO se usan la primera vez para sembrar la tabla
+    # `admins` desde env vars (ver main.lifespan). El login real valida SIEMPRE contra
+    # la BD con hash bcrypt. Cambiá la password con `python -m app.cli change-password`.
     admin_user: str = "admin"
     admin_password: str = "reencuentros2026"
+
+    # JWT firmado para los endpoints de admin.
+    # >>> JWT_SECRET DEBE estar setteado en producción (generá uno con
+    #     `python -c "import secrets; print(secrets.token_urlsafe(64))"`).
+    # Si está vacío, el server falla al arrancar con un mensaje claro.
+    jwt_secret: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_expires_minutes: int = 60
 
     @property
     def endpoint_url(self) -> str:
         """Endpoint S3 del Space; se deriva de la región si no se define."""
-        return self.spaces_endpoint or f"https://{self.spaces_region}.digitaloceanspaces.com"
+        return (
+            self.spaces_endpoint
+            or f"https://{self.spaces_region}.digitaloceanspaces.com"
+        )
 
     @property
     def public_base_url(self) -> str:
         """Base pública para construir la URL de cada imagen subida."""
         if self.spaces_cdn_endpoint:
             return self.spaces_cdn_endpoint.rstrip("/")
-        return f"https://{self.spaces_bucket}.{self.spaces_region}.digitaloceanspaces.com"
+        return (
+            f"https://{self.spaces_bucket}.{self.spaces_region}.digitaloceanspaces.com"
+        )
 
 
 @lru_cache
