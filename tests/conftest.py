@@ -7,7 +7,7 @@ from uuid import uuid4
 
 # Third-party
 import pytest
-from fastapi import TestClient
+from fastapi.testclient import TestClient
 
 # Local
 from app.auth import Admin
@@ -52,8 +52,8 @@ def client(admin):
     Does NOT start lifespan (no DB/DeepFace boot).
     Override get_current_admin to return a dummy Admin.
     """
-    from app.main import app
     from app.auth import get_current_admin
+    from app.main import app
 
     # Override the auth dependency
     async def override_get_current_admin():
