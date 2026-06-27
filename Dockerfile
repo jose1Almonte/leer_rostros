@@ -3,9 +3,10 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     TF_CPP_MIN_LOG_LEVEL=3 \
-    TF_ENABLE_ONEDNN_OPTS=0
+    TF_ENABLE_ONEDNN_OPTS=0 \
+    DEEPFACE_HOME=/weights
 
-# Dependencias de sistema que necesita OpenCV (usado por DeepFace)
+# Dependencias de sistema que necesita OpenCV (usado por DeepFace).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -16,6 +17,8 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
+RUN mkdir -p /weights
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# root-path /api: el nginx del compose proxya /api/ -> aquí.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--root-path", "/api"]

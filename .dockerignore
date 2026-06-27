@@ -1,16 +1,26 @@
 .git
 .gitignore
+.env
 __pycache__/
 *.pyc
-.env
 .venv/
 venv/
 database/
 leer_rostros/
+# La imagen de la API solo necesita app/ + requirements.txt
+frontend/
+docker/
+*.md
 *.jpg
+*.jpeg
 *.png
 *.webp
 haarcascade_frontalface_default.xml
 load_image.py
 search_image.py
 main.py
+evaluate.py
+benchmark_lfw.py
+benchmark_dlib.py
+test_azure.py
+azure_face.py
