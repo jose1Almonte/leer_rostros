@@ -86,19 +86,38 @@ class FakePersonaRepository:
         return results
 
     def list_admin(
-        self, limit: int, estado: str | None = None, moderacion: str | None = None
+        self,
+        limit: int,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        offset: int = 0,
     ) -> list[dict]:
-        """Return stored personas as PersonaAdmin-shaped dicts."""
-        results = []
+        """Return stored personas as PersonaAdmin-shaped dicts (paginado con offset)."""
+        filtered = []
         for persona in self._personas:
             if estado and persona.estado.value != estado:
                 continue
             if moderacion and persona.moderacion != moderacion:
                 continue
-            results.append(self._to_admin_dict(persona))
-            if len(results) >= limit:
-                break
-        return results
+            filtered.append(self._to_admin_dict(persona))
+        return filtered[max(0, offset): max(0, offset) + limit]
+
+    def stats(self) -> dict:
+        """Conteos en memoria para tests del dashboard."""
+        pids = {str(p.person_id) for p in self._personas}
+        by = lambda pred: len({str(p.person_id) for p in self._personas if pred(p)})
+        return {
+            "total": len(pids),
+            "buscadas": by(lambda p: p.estado.value == "buscada"),
+            "encontradas": by(lambda p: p.estado.value == "encontrada"),
+            "menores": by(lambda p: p.es_menor),
+            "ocultas": by(lambda p: p.moderacion == "rechazada"),
+            "pendientes_moderacion": by(lambda p: p.moderacion == "pendiente"),
+            "reportes_publicaciones": 0,
+            "reportes_publicaciones_pendientes": 0,
+            "reportes_fallas": 0,
+            "reportes_fallas_pendientes": 0,
+        }
 
     def set_moderacion(self, person_id: str, valor: str) -> int:
         """Update moderacion for all personas with the given person_id."""

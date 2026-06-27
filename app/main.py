@@ -32,6 +32,7 @@ from app.domain import MatchingPolicy
 from app.domain.persona import Estado, PersonaBase
 from app.repositories import PersonaRepository
 from app.schemas import (
+    AdminStats,
     Candidato,
     LoginBody,
     LoginResp,
@@ -264,7 +265,11 @@ El token se obtiene de `POST /admin/login` (abajo).
   `.env` si la tabla está vacía. Cambiá la password con
   `python -m app.cli change-password <usuario>`.
 - `POST /buscar` — comparar una foto contra TODA la base (campos `file`, `limite`, `estado`).
-- `GET /admin/personas` — listar registros. Query: `limite`, `estado`, `moderacion`.
+- `GET /admin/stats` — **conteos reales** para el dashboard (total, buscadas, encontradas,
+  menores, ocultas, pendientes, reportes). Usalo para los totales; NO cuentes el largo de
+  `/admin/personas` (viene topado por `limite`).
+- `GET /admin/personas` — listar registros. Query: `limite`, `offset` (paginación),
+  `estado`, `moderacion`. Para recorrer todo: `limite=100&offset=0`, luego `offset=100`, etc.
 - `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
 - `DELETE /admin/personas/{person_id}` — borrar.
 - `GET /admin/reportes` — ver reportes recibidos (filtros `tipo`, `estado`).
@@ -465,12 +470,41 @@ async def buscar_admin(
     responses=_ADMIN_RESPONSES,
     summary="Superadmin: listar registros",
 )
-def listar(limite: int = 100, estado: str | None = None, moderacion: str | None = None):
-    """Lista registros. Filtra por estado y/o moderación (para revisar/aprobar)."""
+def listar(
+    limite: int = 100,
+    estado: str | None = None,
+    moderacion: str | None = None,
+    offset: int = 0,
+):
+    """Lista registros. Filtra por estado y/o moderación (para revisar/aprobar).
+
+    Paginación: usa `limite` + `offset` (ej. página 2 de 100 → limite=100&offset=100).
+    Para el TOTAL real usa `GET /admin/stats` (este endpoint solo devuelve la página)."""
     use_case = ListarPersonasAdmin(get_repo())
     return _use_case_execute(
-        use_case.execute, limite=limite, estado=estado, moderacion=moderacion
+        use_case.execute,
+        limite=limite,
+        estado=estado,
+        moderacion=moderacion,
+        offset=offset,
     )
+
+
+@app.get(
+    "/admin/stats",
+    response_model=AdminStats,
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: conteos reales para el dashboard",
+)
+def admin_stats():
+    """Devuelve los **totales reales** de la base (no dependen de paginación):
+    total de personas, buscadas, encontradas, menores, ocultas, pendientes y reportes.
+
+    Úsalo en el dashboard en vez de contar el largo de `GET /admin/personas`
+    (ese viene topado por `limite`)."""
+    return AdminStats(**get_repo().stats())
 
 
 @app.patch(

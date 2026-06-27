@@ -94,7 +94,27 @@ class PersonaRepository:
                coalesce(max(telefono_responsable), max(telefono_contacto)),
                max(codigo), max(moderacion), array_agg(image_url), min(created_at)
         FROM personas {where}
-        GROUP BY person_id ORDER BY min(created_at) DESC LIMIT %s
+        GROUP BY person_id ORDER BY min(created_at) DESC LIMIT %s OFFSET %s
+    """
+
+    # Conteos reales para el dashboard de admin (no dependen de paginación).
+    _STATS_PERSONAS = """
+        SELECT
+          count(DISTINCT person_id)                                          AS total,
+          count(DISTINCT person_id) FILTER (WHERE estado='buscada')          AS buscadas,
+          count(DISTINCT person_id) FILTER (WHERE estado='encontrada')       AS encontradas,
+          count(DISTINCT person_id) FILTER (WHERE es_menor)                  AS menores,
+          count(DISTINCT person_id) FILTER (WHERE moderacion='rechazada')    AS ocultas,
+          count(DISTINCT person_id) FILTER (WHERE moderacion='pendiente')    AS pendientes
+        FROM personas
+    """
+    _STATS_REPORTES = """
+        SELECT
+          count(*) FILTER (WHERE tipo='publicacion')                              AS pub_total,
+          count(*) FILTER (WHERE tipo='publicacion' AND estado='pendiente')       AS pub_pendientes,
+          count(*) FILTER (WHERE tipo='falla')                                    AS fallas_total,
+          count(*) FILTER (WHERE tipo='falla' AND estado='pendiente')             AS fallas_pendientes
+        FROM reportes
     """
 
     # Update moderation status
@@ -211,11 +231,16 @@ class PersonaRepository:
         return [self._row_to_candidato_dict(r) for r in rows]
 
     def list_admin(
-        self, limit: int, estado: str | None = None, moderacion: str | None = None
+        self,
+        limit: int,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        offset: int = 0,
     ) -> list[dict]:
         """List personas for admin view, with optional estado/moderacion filters.
 
-        Returns list of PersonaAdmin-shaped dicts. Does NOT apply privacy masking.
+        Soporta paginación con `offset`. Returns list of PersonaAdmin-shaped dicts.
+        Does NOT apply privacy masking.
         """
         conds, args = [], []
         if estado in ("buscada", "encontrada"):
@@ -226,10 +251,29 @@ class PersonaRepository:
             args.append(moderacion)
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         args.append(limit)
+        args.append(max(0, offset))
         sql = self._LIST_ADMIN.format(where=where)
         with self._pool.connection() as conn:
             rows = conn.execute(sql, tuple(args)).fetchall()
         return [self._row_to_admin_dict(r) for r in rows]
+
+    def stats(self) -> dict:
+        """Conteos reales (totales) para el dashboard de admin. No paginado."""
+        with self._pool.connection() as conn:
+            p = conn.execute(self._STATS_PERSONAS).fetchone()
+            r = conn.execute(self._STATS_REPORTES).fetchone()
+        return {
+            "total": p[0],
+            "buscadas": p[1],
+            "encontradas": p[2],
+            "menores": p[3],
+            "ocultas": p[4],
+            "pendientes_moderacion": p[5],
+            "reportes_publicaciones": r[0],
+            "reportes_publicaciones_pendientes": r[1],
+            "reportes_fallas": r[2],
+            "reportes_fallas_pendientes": r[3],
+        }
 
     def set_moderacion(self, person_id: str, valor: str) -> int:
         """Update moderacion for all rows with the given person_id.

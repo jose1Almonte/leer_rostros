@@ -153,3 +153,18 @@ class PersonaAdmin(BaseModel):
     moderacion: str = "aprobada"
     fotos: list[str]
     created_at: datetime
+
+
+class AdminStats(BaseModel):
+    """Conteos reales para el dashboard del superadmin (no dependen de paginación)."""
+
+    total: int = Field(..., description="Total de personas (únicas) en la base.")
+    buscadas: int = Field(..., description="Personas en estado 'buscada' (familiares).")
+    encontradas: int = Field(..., description="Personas en estado 'encontrada' (rescatistas).")
+    menores: int = Field(..., description="Personas marcadas como menores.")
+    ocultas: int = Field(..., description="Publicaciones rechazadas (moderacion='rechazada').")
+    pendientes_moderacion: int = Field(..., description="Publicaciones pendientes de moderar.")
+    reportes_publicaciones: int = Field(..., description="Reportes de publicaciones inadecuadas.")
+    reportes_publicaciones_pendientes: int = Field(..., description="…de esos, pendientes.")
+    reportes_fallas: int = Field(..., description="Reportes de fallas de la página.")
+    reportes_fallas_pendientes: int = Field(..., description="…de esos, pendientes.")

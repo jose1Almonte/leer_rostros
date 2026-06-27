@@ -57,6 +57,44 @@ class TestListarPersonasAdminHappyPath:
         assert len(results) == 3
         assert all(isinstance(r, PersonaAdmin) for r in results)
 
+    def test_paginacion_offset(self, use_case, fake_repo):
+        """limite + offset pagina correctamente sin solaparse."""
+        for i in range(5):
+            fake_repo._personas.append(
+                PersonaBase(
+                    person_id=uuid4(),
+                    estado=Estado.ENCONTRADA,
+                    es_menor=False,
+                    nombre=f"P{i}",
+                    moderacion="aprobada",
+                    photos=[f"https://x/{i}.jpg"],
+                )
+            )
+        pag1 = use_case.execute(limite=2, estado=None, moderacion=None, offset=0)
+        pag2 = use_case.execute(limite=2, estado=None, moderacion=None, offset=2)
+        assert len(pag1) == 2 and len(pag2) == 2
+        ids1 = {r.person_id for r in pag1}
+        ids2 = {r.person_id for r in pag2}
+        assert ids1.isdisjoint(ids2)  # páginas no se solapan
+
+    def test_stats_cuenta_real(self, fake_repo):
+        """stats() devuelve conteos reales independientes de paginación."""
+        for est in ("buscada", "encontrada", "encontrada"):
+            fake_repo._personas.append(
+                PersonaBase(
+                    person_id=uuid4(),
+                    estado=Estado(est),
+                    es_menor=(est == "buscada"),
+                    moderacion="aprobada",
+                    photos=["https://x/x.jpg"],
+                )
+            )
+        s = fake_repo.stats()
+        assert s["total"] == 3
+        assert s["encontradas"] == 2
+        assert s["buscadas"] == 1
+        assert s["menores"] == 1
+
     def test_filters_by_estado(self, use_case, fake_repo):
         """estado filter works."""
         buscada = PersonaBase(

@@ -17,11 +17,12 @@ class ListarPersonasAdmin:
         limite: int,
         estado: str | None,
         moderacion: str | None,
+        offset: int = 0,
     ) -> list[PersonaAdmin]:
-        """List personas for admin view.
+        """List personas for admin view (paginado con offset).
 
         Returns:
             List of PersonaAdmin with privacy masking applied.
         """
-        results = self._repo.list_admin(limite, estado, moderacion)
+        results = self._repo.list_admin(limite, estado, moderacion, offset=offset)
         return [MenoresPrivacy(PersonaAdmin(**d)) for d in results]
