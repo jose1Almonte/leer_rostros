@@ -7,13 +7,15 @@ Spaces (S3) y devuelve la URL pública.
 
 import os
 
-import boto3
-from botocore.client import Config
-
 from app.config import get_settings
 
 
 def _client():
+    # Import lazy: boto3 y botocore solo se importan cuando realmente se usan
+    # (cuando el deploy configura Spaces). Asi, tests y dev local no necesitan
+    # instalar boto3 solo para importar este módulo.
+    import boto3
+    from botocore.client import Config
     s = get_settings()
     return boto3.client(
         "s3",
