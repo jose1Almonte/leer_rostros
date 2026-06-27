@@ -1,60 +1,76 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI agents and contributors working on this repository.
 
 ## Qué es
 
-App de reconocimiento facial en local. Convierte un rostro de una imagen en un vector
-de características (embedding) con **DeepFace** (modelo `Facenet`) y lo guarda/consulta en
-una base de datos vectorial **ChromaDB** persistida en disco. Pensada como prototipo de
-identificación de personas (p. ej. registro de pacientes en un hospital).
+**Reencuentros** — aplicación web de reconocimiento facial para reunir personas desaparecidas con sus familias. Stack: **Python 3.11**, **FastAPI**, **InsightFace buffalo_l** (ArcFace w600k_r50, 512-dim embeddings), **PostgreSQL 16 + pgvector** (HNSW index, cosine distance), **DigitalOcean Spaces** (S3-compatible, con fallback a disco local). Autenticación admin vía **JWT + bcrypt**.
 
 ## Ejecutar
 
-No hay `requirements.txt`, suite de tests ni linter configurados. Es Python 3.13.
-
 ```bash
-# Instalar dependencias (no declaradas en el repo)
-pip install deepface chromadb
+# Con Docker (recomendado)
+docker-compose up -d
 
-# Correr el flujo (edita las rutas/flags dentro de main.py antes)
-python main.py
+# Sin Docker (requiere Postgres con pgvector)
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-`main.py` es el punto de entrada y un *scratchpad*: las rutas de imagen y los datos de la
-persona están **hardcodeados**, y se alterna entre cargar/buscar comentando líneas. Para
-registrar un rostro se usa el bloque `LoadImage(...).loadData()`; para identificar uno se
-usa `SearchImage(...).searchImage()`.
+Configuración en `.env` (ver `app/config.py`):
+
+- `match_threshold=0.55` (umbral de coincidencia, calibrado para InsightFace)
+- `jwt_secret`, `jwt_expires_minutes`, `jwt_algorithm` (auth)
 
 ## Arquitectura
 
-Dos clases, una por operación, ambas hablan con la misma colección de ChromaDB:
+```
+app/
+  main.py            # FastAPI endpoints: /buscados, /encontrados, /buscar, /admin/*
+  domain/
+    matching.py      # MatchingPolicy: threshold, confidence bands, percentage (sigmoid)
+    privacy.py       # MenoresPrivacy: enmascara nombres de menores en respuestas API
+    persona.py       # Estado enum, Foto dataclass, PersonaBase model
+  repositories/
+    persona.py       # PersonaRepository: todo el SQL para personas + persona_embeddings
+  auth.py            # JWT + bcrypt, admins table, get_current_admin dependency
+  cli.py             # CLI para gestión de admins (crear/listar/eliminar)
+  schemas.py         # Pydantic models: Candidato, PersonaAdmin, AlertaFamiliar, etc.
+  config.py          # Settings via pydantic-settings
+  database.py        # init_db() con pgvector + tabla admins
+  faces.py           # InsightFace buffalo_l: detección + embedding + augmentations
+  storage.py         # Upload/download de imágenes (Spaces o local)
+```
 
-- **`load_image.py` → `LoadImage`**: `DeepFace.represent()` extrae el embedding y
-  `collection.add()` lo inserta con un id `usr_<uuid4>` y metadatos
-  (`nombre`, `rol`/`hospital_name`, `ci`). Crea la colección si no existe.
-- **`search_image.py` → `SearchImage`**: extrae el embedding de la imagen nueva y hace
-  `collection.query(n_results=10)`. Recorre los resultados y considera una coincidencia
-  cuando la **distancia coseno < 1** (umbral hardcodeado).
+### Flujos principales
 
-Detalles que comparten y conviene respetar al editar:
+1. **FAMILIAR** (`POST /buscados`): Sube foto de persona buscada, busca entre encontradas. Devuelve coincidencias rankeadas.
+2. **RESCATISTA** (`POST /encontrados`): Registra persona encontrada. Si un familiar ya la buscaba, genera `AlertaFamiliar`.
+3. **ADMIN** (`POST /buscar`, `GET /admin/personas`, `PATCH .../moderacion`, `DELETE`): Requiere Bearer token. Búsqueda, listado, moderación, eliminación.
 
-- Colección ChromaDB: nombre `"rostros_usuarios"`, métrica `metadata={"hnsw:space": "cosine"}`.
-  El umbral de match depende de esta métrica — si cambias la métrica, recalibra el `< 1`.
-- Persistencia: `chromadb.PersistentClient(path="database/persistent_client_database")`.
-  La carpeta `database/` está en `.gitignore` (no versionar embeddings).
-- Modelo de DeepFace: `"Facenet"` con `enforce_detection=False` (no falla si no detecta
-  rostro). **Ambas clases deben usar el mismo modelo**: los embeddings de modelos distintos
-  no son comparables y romperían la búsqueda silenciosamente.
-- Las dos primeras líneas de cada módulo silencian los logs de TensorFlow
-  (`TF_CPP_MIN_LOG_LEVEL`, `TF_ENABLE_ONEDNN_OPTS`) y van **antes** de importar `deepface`.
+### Privacy protocol
 
-## Notas del repo
+Los nombres de menores se **almacenan** en la DB pero se **enmascaran** en todas las respuestas API regulares (públicas y admin) vía `MenoresPrivacy`. Esto protege la identidad sin perder datos.
 
-- `haarcascade_frontalface_default.xml` está presente pero el código actual no lo referencia
-  (DeepFace gestiona su propia detección). No lo borres sin confirmar.
-- `env_template.py` está vacío; `env.py` está en `.gitignore`. No hay variables de entorno
-  en uso por ahora.
-- Hay un **clon anidado del propio repo** en `leer_rostros/` (con su propio `.git`). Es una
-  duplicación accidental; trabaja siempre en la raíz `E:\personal\leer_rostros\`, no dentro
-  de la subcarpeta.
+### Multi-embeddings por foto
+
+Cada foto genera 1 embedding base + hasta 2 augmentations (rotaciones ±15°), almacenados en `persona_embeddings`. Las búsquedas usan `ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY embedding <=> query ASC)` para obtener el mejor match por persona.
+
+## Testing
+
+```bash
+# Correr todos los tests
+python -m pytest tests/ -v
+
+# Con coverage
+python -m pytest tests/ --cov=app/domain --cov=app/repositories --cov-report=term-missing
+```
+
+Tests unitarios en `tests/domain/` y `tests/repositories/`. No requieren DB ni modelo cargado.
+
+## Notas
+
+- `app/main.py` **no contiene SQL inline** para tablas `personas`/`persona_embeddings` — todo va vía `PersonaRepository`.
+- El umbral `match_threshold=0.55` se carga desde `Settings` al inicio. `MatchingPolicy.match_percentage` delega a `faces.distance_to_confidence` (sigmoid, k=12.0, midpoint=0.40).
+- Archivos v0 eliminados: `load_image.py`, `search_image.py`, `main.py` (root), `haarcascade_frontalface_default.xml`.
+- Repo anidado `leer_rostros/` en `.gitignore` — no trabajar dentro.
