@@ -124,13 +124,13 @@ document.getElementById("btnBus").addEventListener("click", async () => {
   const res = document.getElementById("resBus");
   if (!f) { res.innerHTML = '<span class="empty">Selecciona una imagen.</span>'; return; }
   const btn = document.getElementById("btnBus"); btn.disabled = true; res.textContent = "Buscando coincidencias...";
-  const fd = new FormData(); fd.append("file", f);
+  const fd = new FormData(); fd.append("file", f); fd.append("limite", "25");
   try {
     const r = await fetch(API + "/buscar", { method: "POST", body: fd });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "Error");
     if (!data.coincidencias.length) { res.innerHTML = '<span class="empty">No hay personas registradas todavía.</span>'; return; }
-    res.innerHTML = `<p class="dist">Umbral de match: distancia &lt; ${data.umbral}</p>` +
+    res.innerHTML = `<p class="dist">${data.coincidencias.length} candidatos · ordenados por parecido · umbral de match: distancia &lt; ${data.umbral}</p>` +
       data.coincidencias.map(c => {
         const cls = c.confianza === 'alta' ? 'ok' : c.confianza === 'media' ? 'media' : 'no';
         const txt = c.confianza === 'alta' ? '✓ COINCIDE (alta)'
