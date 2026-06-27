@@ -8,30 +8,33 @@
 - GET  /admin/personas           lista todos los registros.
 """
 
-import hashlib
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 
 # psycopg (database) ANTES que faces (TensorFlow) para evitar crash nativo.
 from app.config import get_settings
 from app.database import close_pool, get_pool, init_db
 from app import faces, storage
-from app.schemas import (
-    AlertaFamiliar, Candidato, LoginBody, LoginResp, PersonaAdmin,
-    ResultadoBusqueda, ResultadoRegistro,
+from app.auth import (
+    Admin,
+    create_access_token,
+    get_admin_by_username,
+    get_current_admin,
+    hash_password,
+    touch_last_login,
+    verify_password,
 )
-
-
-def _admin_token() -> str:
-    return hashlib.sha256(("reencuentros::" + get_settings().admin_password).encode()).hexdigest()
-
-
-def requiere_admin(authorization: str = Header(None, description="Bearer <token> del login de admin.")):
-    """Protege los endpoints de superadmin. Header: `Authorization: Bearer <token>`."""
-    if authorization != f"Bearer {_admin_token()}":
-        raise HTTPException(401, "No autorizado. Inicia sesión en POST /admin/login.")
+from app.schemas import (
+    AlertaFamiliar,
+    Candidato,
+    LoginBody,
+    LoginResp,
+    PersonaAdmin,
+    ResultadoBusqueda,
+    ResultadoRegistro,
+)
 
 CONTENT_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 # Umbrales calibrados a la distancia coseno de InsightFace buffalo_l (ArcFace).
@@ -40,8 +43,10 @@ CONF_MEDIA = 0.55
 LIMITE_MAX = 50  # tope de coincidencias que el front puede pedir
 
 # columnas de dominio que devuelve la búsqueda (orden fijo, consumido por _fila_a_candidato)
-_COLS = ("person_id, estado, es_menor, nombre, apellido, edad, refugio, ubicacion, "
-         "telefono_responsable, telefono_contacto, descripcion, image_url")
+_COLS = (
+    "person_id, estado, es_menor, nombre, apellido, edad, refugio, ubicacion, "
+    "telefono_responsable, telefono_contacto, descripcion, image_url"
+)
 
 
 def _sel(alias: str) -> str:
@@ -127,7 +132,7 @@ def _buscar_mejor_por_persona(conn, embedding, where: str, params: tuple, limite
     """
     return conn.execute(
         f"""
-        SELECT {_sel('p2')}, b.distancia
+        SELECT {_sel("p2")}, b.distancia
         FROM (
             SELECT pe.foto_id, p.person_id,
                    pe.embedding <=> %s AS distancia,
@@ -149,23 +154,46 @@ def _buscar_mejor_por_persona(conn, embedding, where: str, params: tuple, limite
 
 def _buscar_por_estado(conn, embedding, estado: str, limite: int):
     return _buscar_mejor_por_persona(
-        conn, embedding,
-        "WHERE p.estado = %s AND p.moderacion = 'aprobada'", (estado,), limite,
+        conn,
+        embedding,
+        "WHERE p.estado = %s AND p.moderacion = 'aprobada'",
+        (estado,),
+        limite,
     )
 
 
 def _fila_a_candidato(r) -> Candidato:
-    (person_id, estado, es_menor, nombre, apellido, edad, refugio, ubicacion,
-     tel_resp, tel_contacto, descripcion, image_url, distancia) = r
+    (
+        person_id,
+        estado,
+        es_menor,
+        nombre,
+        apellido,
+        edad,
+        refugio,
+        ubicacion,
+        tel_resp,
+        tel_contacto,
+        descripcion,
+        image_url,
+        distancia,
+    ) = r
     d = float(distancia)
     return Candidato(
-        person_id=str(person_id), estado=estado, es_menor=bool(es_menor),
+        person_id=str(person_id),
+        estado=estado,
+        es_menor=bool(es_menor),
         nombre=None if es_menor else nombre,  # protocolo de protección
-        apellido=None if es_menor else apellido, edad=edad,
-        refugio=refugio, ubicacion=ubicacion or refugio,
-        telefono=tel_resp or tel_contacto, descripcion=descripcion,
-        image_url=image_url, distancia=round(d, 4),
-        coincidencia=pct_coincidencia(d), confianza=nivel_confianza(d),
+        apellido=None if es_menor else apellido,
+        edad=edad,
+        refugio=refugio,
+        ubicacion=ubicacion or refugio,
+        telefono=tel_resp or tel_contacto,
+        descripcion=descripcion,
+        image_url=image_url,
+        distancia=round(d, 4),
+        coincidencia=pct_coincidencia(d),
+        confianza=nivel_confianza(d),
     )
 
 
@@ -181,6 +209,42 @@ async def lifespan(app: FastAPI):
             pass
     get_pool()
     faces.warmup()
+
+    # Seed del primer admin desde env vars (idempotente).
+    # Si la tabla `admins` está vacía, crea el admin con admin_user/admin_password.
+    # Después de esto, esos env vars se IGNORAN para el login (siempre se valida contra BD).
+    s = get_settings()
+    if s.admin_user and s.admin_password:
+        with get_pool().connection() as conn:
+            if get_admin_by_username(conn, s.admin_user) is None:
+                conn.execute(
+                    "INSERT INTO admins (username, password_hash) VALUES (%s, %s)",
+                    (s.admin_user, hash_password(s.admin_password)),
+                )
+                conn.commit()
+                print(
+                    f"[seed] admin '{s.admin_user}' creado desde env vars. "
+                    f"Cambiá la password con: python -m app.cli change-password {s.admin_user}",
+                    flush=True,
+                )
+    else:
+        with get_pool().connection() as conn:
+            any_admin = conn.execute("SELECT 1 FROM admins LIMIT 1").fetchone()
+        if any_admin is None:
+            print(
+                "[seed] AVISO: no hay admins y ADMIN_USER/ADMIN_PASSWORD están vacíos. "
+                "Creá uno con: python -m app.cli create-admin",
+                flush=True,
+            )
+
+    # Falla rápido si JWT_SECRET no está configurado y alguien podría intentar loguearse.
+    if not s.jwt_secret:
+        print(
+            "[startup] AVISO: JWT_SECRET no está configurado. "
+            "El endpoint /admin/login va a fallar hasta que lo setees en .env.",
+            flush=True,
+        )
+
     yield
     close_pool()
 
@@ -191,6 +255,16 @@ tags = [
     {"name": "admin", "description": "Superadmin: buscar y comparar imágenes."},
     {"name": "sistema", "description": "Estado del servicio."},
 ]
+
+# Respuestas de error que Swagger debe mostrar para los endpoints protegidos por
+# `get_current_admin`. Sin esto, /api/docs no exhibe los 401/403 que el dev debe
+# manejar en el front.
+_ADMIN_RESPONSES = {
+    401: {
+        "description": "Sin token, token expirado, token mal firmado, o admin inexistente."
+    },
+    403: {"description": "Cuenta de admin desactivada (is_active=false)."},
+}
 
 DESCRIPTION = """
 API de **reconocimiento facial** para reunir personas desaparecidas con sus familias.
@@ -238,9 +312,32 @@ una **alerta** con el nombre y teléfono del familiar.
 > **Protocolo de menor:** si `es_menor=true`, el `nombre`/`apellido` NO se guardan y en
 > las búsquedas aparece como *"Menor protegido"*.
 
-### 🛡️ SUPERADMIN
-- `POST /buscar` — comparar una foto contra TODA la base (campo `file`, `limite`, `estado`).
-- `GET /admin/personas` — listar registros.
+    ### 🛡️ SUPERADMIN
+
+    Todos los endpoints de abajo requieren el header **`Authorization: Bearer <token>`**.
+    El token se obtiene de `POST /admin/login` (abajo).
+
+    - `POST /admin/login` — login. Body JSON `{"usuario":"...","password":"..."}`. Devuelve
+      un **JWT** firmado (HS256) con expiración (`JWT_EXPIRES_MINUTES`, def. 60 min). La
+      validación es **siempre contra la BD** (tabla `admins`, hash bcrypt). La primera
+      vez, el admin se siembra automáticamente desde `ADMIN_USER` / `ADMIN_PASSWORD` del
+      `.env` si la tabla está vacía. Cambiá la password con
+      `python -m app.cli change-password <usuario>`.
+    - `POST /buscar` — comparar una foto contra TODA la base (campos `file`, `limite`, `estado`).
+    - `GET /admin/personas` — listar registros. Query: `limite`, `estado`, `moderacion`.
+    - `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
+    - `DELETE /admin/personas/{person_id}` — borrar.
+
+    **Errores comunes en endpoints de admin:**
+
+    | Código | Cuándo |
+    |---|---|
+    | `401` | Sin header `Authorization`, token mal firmado, token expirado, o el admin ya no existe |
+    | `403` | El admin existe pero está `is_active=false` (desactivado) |
+
+    El body de error siempre es `{"detail": "..."}`. **No hay endpoint de logout**: el
+    token vive en el front y expira solo; al recibir 401, el front debe volver a llamar
+    a `POST /admin/login`.
 
 ---
 
@@ -255,7 +352,9 @@ Cada candidato trae:
 app = FastAPI(
     title="Reencuentros — Reconocimiento facial",
     description=DESCRIPTION,
-    version="2.0.0", openapi_tags=tags, lifespan=lifespan,
+    version="2.1.0",
+    openapi_tags=tags,
+    lifespan=lifespan,
 )
 
 
@@ -264,61 +363,123 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/admin/login", response_model=LoginResp, tags=["admin"], summary="Login del superadmin")
+@app.post(
+    "/admin/login",
+    response_model=LoginResp,
+    tags=["admin"],
+    summary="Login del superadmin",
+)
 def admin_login(datos: LoginBody):
-    """Devuelve un token. Úsalo como header `Authorization: Bearer <token>` en los
-    demás endpoints de admin. Body JSON: `{"usuario":"admin","password":"..."}`."""
-    s = get_settings()
-    if datos.usuario != s.admin_user or datos.password != s.admin_password:
+    """Devuelve un JWT. Úsalo como header `Authorization: Bearer <token>` en los
+    demás endpoints de admin. Body JSON: `{"usuario":"admin","password":"..."}`.
+
+    El login valida SIEMPRE contra la BD (tabla `admins`). El password se compara
+    con bcrypt — nunca en plano."""
+    with get_pool().connection() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash, is_active FROM admins WHERE username = %s",
+            (datos.usuario,),
+        ).fetchone()
+    # Mismo error para usuario inexistente, password incorrecta o cuenta inactiva:
+    # no le damos pistas a un atacante sobre qué campo falló.
+    if row is None or not row[3] or not verify_password(datos.password, row[2]):
         raise HTTPException(401, "Usuario o contraseña incorrectos")
-    return LoginResp(token=_admin_token())
+    admin_id, username = row[0], row[1]
+    with get_pool().connection() as conn:
+        touch_last_login(conn, admin_id)
+        conn.commit()
+    return LoginResp(token=create_access_token(admin_id, username))
 
 
-@app.post("/buscados", response_model=ResultadoBusqueda, status_code=201, tags=["familiar"],
-          summary="Familiar: registrar búsqueda y ver coincidencias")
+@app.post(
+    "/buscados",
+    response_model=ResultadoBusqueda,
+    status_code=201,
+    tags=["familiar"],
+    summary="Familiar: registrar búsqueda y ver coincidencias",
+)
 async def registrar_busqueda(
-    files: list[UploadFile] = File(..., description="Foto(s) del rostro de la persona buscada (obligatorio)."),
-    nombre: str | None = Form(None), apellido: str | None = Form(None),
-    edad: str | None = Form(None), doc_tipo: str | None = Form(None),
+    files: list[UploadFile] = File(
+        ..., description="Foto(s) del rostro de la persona buscada (obligatorio)."
+    ),
+    nombre: str | None = Form(None),
+    apellido: str | None = Form(None),
+    edad: str | None = Form(None),
+    doc_tipo: str | None = Form(None),
     doc_numero: str | None = Form(None),
-    telefono_contacto: str | None = Form(None, description="Teléfono del familiar para el reencuentro."),
-    limite: int = Form(10, description="Cuántas coincidencias devolver (1-50). El front lo decide."),
+    telefono_contacto: str | None = Form(
+        None, description="Teléfono del familiar para el reencuentro."
+    ),
+    limite: int = Form(
+        10, description="Cuántas coincidencias devolver (1-50). El front lo decide."
+    ),
 ):
     procesadas = await _procesar_fotos(files)
     # --- Validaciones ---
     if not procesadas:
         raise HTTPException(422, "No se detectó ningún rostro en la(s) foto(s).")
     if not (doc_numero or (nombre and nombre.strip())):
-        raise HTTPException(422, "Indica al menos el nombre o el número de identificación.")
+        raise HTTPException(
+            422, "Indica al menos el nombre o el número de identificación."
+        )
 
     limite = max(1, min(LIMITE_MAX, limite))
     embedding = _embedding_consulta(procesadas)
     person_id = uuid.uuid4()
     codigo = gen_codigo()
-    datos = dict(estado="buscada", menor=False, nombre=nombre, apellido=apellido, edad=edad,
-                 doc_tipo=doc_tipo, doc_numero=doc_numero, tel_contacto=telefono_contacto,
-                 refugio=None, tel_resp=None, doc_resp=None, descripcion=None,
-                 ubicacion=None, codigo=codigo)
+    datos = dict(
+        estado="buscada",
+        menor=False,
+        nombre=nombre,
+        apellido=apellido,
+        edad=edad,
+        doc_tipo=doc_tipo,
+        doc_numero=doc_numero,
+        tel_contacto=telefono_contacto,
+        refugio=None,
+        tel_resp=None,
+        doc_resp=None,
+        descripcion=None,
+        ubicacion=None,
+        codigo=codigo,
+    )
     with get_pool().connection() as conn:
         _insertar_fotos(conn, person_id, datos, procesadas)
         encontrados = _buscar_por_estado(conn, embedding, "encontrada", limite)
         conn.commit()
 
     candidatos = [_fila_a_candidato(r) for r in encontrados]
-    return ResultadoBusqueda(codigo=codigo, total=len(candidatos), coincidencias=candidatos)
+    return ResultadoBusqueda(
+        codigo=codigo, total=len(candidatos), coincidencias=candidatos
+    )
 
 
-@app.post("/encontrados", response_model=ResultadoRegistro, status_code=201, tags=["rescatista"],
-          summary="Rescatista: registrar persona encontrada")
+@app.post(
+    "/encontrados",
+    response_model=ResultadoRegistro,
+    status_code=201,
+    tags=["rescatista"],
+    summary="Rescatista: registrar persona encontrada",
+)
 async def registrar_encontrado(
-    files: list[UploadFile] = File(..., description="Foto(s) del rostro de la persona encontrada (obligatorio)."),
-    es_menor: bool = Form(False, description="Activar si es menor de edad (oculta datos sensibles)."),
-    nombre: str | None = Form(None), apellido: str | None = Form(None),
-    doc_tipo: str | None = Form(None), doc_numero: str | None = Form(None),
+    files: list[UploadFile] = File(
+        ..., description="Foto(s) del rostro de la persona encontrada (obligatorio)."
+    ),
+    es_menor: bool = Form(
+        False, description="Activar si es menor de edad (oculta datos sensibles)."
+    ),
+    nombre: str | None = Form(None),
+    apellido: str | None = Form(None),
+    doc_tipo: str | None = Form(None),
+    doc_numero: str | None = Form(None),
     refugio: str | None = Form(None, description="Refugio donde se encuentra."),
     ubicacion: str | None = Form(None, description="Dónde se encontró a la persona."),
-    telefono_responsable: str | None = Form(None, description="Teléfono del responsable."),
-    doc_responsable: str | None = Form(None, description="Identificación del responsable."),
+    telefono_responsable: str | None = Form(
+        None, description="Teléfono del responsable."
+    ),
+    doc_responsable: str | None = Form(
+        None, description="Identificación del responsable."
+    ),
     descripcion: str | None = Form(None, description="Descripción física básica."),
 ):
     procesadas = await _procesar_fotos(files)
@@ -330,17 +491,29 @@ async def registrar_encontrado(
     if not telefono_responsable or not telefono_responsable.strip():
         raise HTTPException(422, "El teléfono del responsable es obligatorio.")
     if es_menor and not (doc_responsable and doc_responsable.strip()):
-        raise HTTPException(422, "Para un menor, la identificación del responsable es obligatoria.")
+        raise HTTPException(
+            422, "Para un menor, la identificación del responsable es obligatoria."
+        )
 
     embedding = _embedding_consulta(procesadas)
     person_id = uuid.uuid4()
     codigo = gen_codigo()
-    datos = dict(estado="encontrada", menor=es_menor,
-                 nombre=None if es_menor else nombre,        # protocolo de protección
-                 apellido=None if es_menor else apellido,
-                 edad=None, doc_tipo=doc_tipo, doc_numero=doc_numero, tel_contacto=None,
-                 refugio=refugio, tel_resp=telefono_responsable, doc_resp=doc_responsable,
-                 descripcion=descripcion, ubicacion=ubicacion, codigo=codigo)
+    datos = dict(
+        estado="encontrada",
+        menor=es_menor,
+        nombre=None if es_menor else nombre,  # protocolo de protección
+        apellido=None if es_menor else apellido,
+        edad=None,
+        doc_tipo=doc_tipo,
+        doc_numero=doc_numero,
+        tel_contacto=None,
+        refugio=refugio,
+        tel_resp=telefono_responsable,
+        doc_resp=doc_responsable,
+        descripcion=descripcion,
+        ubicacion=ubicacion,
+        codigo=codigo,
+    )
     with get_pool().connection() as conn:
         _insertar_fotos(conn, person_id, datos, procesadas)
         buscados = _buscar_por_estado(conn, embedding, "buscada", 1)
@@ -352,19 +525,30 @@ async def registrar_encontrado(
         d = float(r[-1])
         if d < CONF_MEDIA:  # coincidencia real (alta/media)
             alerta = AlertaFamiliar(
-                person_id=str(r[0]), familiar_nombre=r[3], familiar_telefono=r[9],
-                image_url=r[11], coincidencia=pct_coincidencia(d), confianza=nivel_confianza(d),
+                person_id=str(r[0]),
+                familiar_nombre=r[3],
+                familiar_telefono=r[9],
+                image_url=r[11],
+                coincidencia=pct_coincidencia(d),
+                confianza=nivel_confianza(d),
             )
     return ResultadoRegistro(codigo=codigo, person_id=str(person_id), alerta=alerta)
 
 
-@app.post("/buscar", response_model=list[Candidato], tags=["admin"],
-          dependencies=[Depends(requiere_admin)],
-          summary="Superadmin: comparar una foto contra TODA la base")
+@app.post(
+    "/buscar",
+    response_model=list[Candidato],
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: comparar una foto contra TODA la base",
+)
 async def buscar_admin(
     file: UploadFile = File(...),
     limite: int = Form(25, description="Cuántas coincidencias devolver (1-50)."),
-    estado: str | None = Form(None, description="Filtrar por 'buscada' o 'encontrada' (vacío = todas)."),
+    estado: str | None = Form(
+        None, description="Filtrar por 'buscada' o 'encontrada' (vacío = todas)."
+    ),
 ):
     data = await file.read()
     try:
@@ -380,9 +564,14 @@ async def buscar_admin(
     return [_fila_a_candidato(r) for r in rows]
 
 
-@app.get("/admin/personas", response_model=list[PersonaAdmin], tags=["admin"],
-         dependencies=[Depends(requiere_admin)],
-         summary="Superadmin: listar registros")
+@app.get(
+    "/admin/personas",
+    response_model=list[PersonaAdmin],
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: listar registros",
+)
 def listar(limite: int = 100, estado: str | None = None, moderacion: str | None = None):
     """Lista registros. Filtra por estado y/o moderación (para revisar/aprobar)."""
     conds, args = [], []
@@ -408,24 +597,40 @@ def listar(limite: int = 100, estado: str | None = None, moderacion: str | None 
         ).fetchall()
     return [
         PersonaAdmin(
-            person_id=str(r[0]), estado=r[1], es_menor=bool(r[2]), nombre=r[3], apellido=r[4],
-            edad=r[5], doc=r[6], refugio=r[7], ubicacion=r[8], telefono=r[9], codigo=r[10],
-            moderacion=r[11], fotos=list(r[12]), created_at=r[13],
+            person_id=str(r[0]),
+            estado=r[1],
+            es_menor=bool(r[2]),
+            nombre=r[3],
+            apellido=r[4],
+            edad=r[5],
+            doc=r[6],
+            refugio=r[7],
+            ubicacion=r[8],
+            telefono=r[9],
+            codigo=r[10],
+            moderacion=r[11],
+            fotos=list(r[12]),
+            created_at=r[13],
         )
         for r in rows
     ]
 
 
-@app.patch("/admin/personas/{person_id}/moderacion", tags=["admin"],
-           dependencies=[Depends(requiere_admin)],
-           summary="Aprobar / rechazar una publicación")
+@app.patch(
+    "/admin/personas/{person_id}/moderacion",
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Aprobar / rechazar una publicación",
+)
 def moderar(person_id: str, valor: str):
     """`valor` = `aprobada` | `rechazada` | `pendiente`. Las rechazadas no aparecen en búsquedas."""
     if valor not in ("aprobada", "rechazada", "pendiente"):
         raise HTTPException(400, "valor debe ser 'aprobada', 'rechazada' o 'pendiente'")
     with get_pool().connection() as conn:
         n = conn.execute(
-            "UPDATE personas SET moderacion = %s WHERE person_id = %s", (valor, person_id)
+            "UPDATE personas SET moderacion = %s WHERE person_id = %s",
+            (valor, person_id),
         ).rowcount
         conn.commit()
     if not n:
@@ -433,9 +638,13 @@ def moderar(person_id: str, valor: str):
     return {"person_id": person_id, "moderacion": valor, "fotos_actualizadas": n}
 
 
-@app.delete("/admin/personas/{person_id}", tags=["admin"],
-            dependencies=[Depends(requiere_admin)],
-            summary="Eliminar una publicación (contenido indebido)")
+@app.delete(
+    "/admin/personas/{person_id}",
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Eliminar una publicación (contenido indebido)",
+)
 def eliminar(person_id: str):
     """Borra la persona, sus fotos del almacenamiento y sus filas de la BD."""
     with get_pool().connection() as conn:

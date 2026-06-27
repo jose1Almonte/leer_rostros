@@ -84,8 +84,12 @@ def init_db() -> None:
         for col, decl in _EXTRA_COLS:
             conn.execute(f"ALTER TABLE personas ADD COLUMN IF NOT EXISTS {col} {decl}")
         conn.execute("UPDATE personas SET person_id = id WHERE person_id IS NULL")
-        conn.execute("CREATE INDEX IF NOT EXISTS personas_person_id_idx ON personas (person_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS personas_estado_idx ON personas (estado)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS personas_person_id_idx ON personas (person_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS personas_estado_idx ON personas (estado)"
+        )
 
         # --- Migración del esquema antiguo (DeepFace/Facenet512) ---
         # Los embeddings vivían como columna en `personas`. Con InsightFace buffalo_l
@@ -114,6 +118,23 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS persona_embeddings_hnsw "
             "ON persona_embeddings USING hnsw (embedding vector_cosine_ops)"
+        )
+
+        # --- Tabla de admins (superadmin) ---
+        # El password NUNCA se guarda en plano: vive como hash bcrypt. El seed inicial
+        # (desde env vars) lo crea la primera vez que init_db() corre con la tabla
+        # vacía — ver main.lifespan.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admins (
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                is_active     BOOLEAN NOT NULL DEFAULT true,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_login_at TIMESTAMPTZ
+            )
+            """
         )
 
         conn.execute("SELECT pg_advisory_unlock(927138)")

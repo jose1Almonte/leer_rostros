@@ -1,18 +1,22 @@
 # API — Guía para el frontend
 
 Base URL: `https://symtechven.com/api` (o `http://IP/api` en el VPS).
-Swagger interactivo: **`/api/docs`** · ReDoc: `/api/redoc`.
+Swagger interactivo: **`/api/docs`** · ReDoc: `/api/redoc`. En el Swagger, el botón
+**Authorize** (candado arriba a la derecha) acepta un Bearer token para probar los
+endpoints de admin sin copiar el header a mano.
 
 Todas las peticiones que suben foto son **`multipart/form-data`**. La foto va en
-**`files`** (puedes mandar varias del mismo registro). Errores: HTTP `422` (validación)
-o `400`, con `{"detail": "mensaje"}`.
+**`files`** (puedes mandar varias del mismo registro). Errores: HTTP `422` (validación),
+`400` (parámetro inválido), `401` (sin token / token inválido o expirado en endpoints
+de admin), `403` (cuenta desactivada), o `404`. El body siempre es `{"detail": "..."}`.
 
 ---
 
 ## 🟣 FAMILIAR — `POST /buscados`
+
 Registra una búsqueda y devuelve los encontrados más parecidos.
 
-**Campos (form-data):** `files`* · `nombre` · `apellido` · `edad` · `doc_tipo` · `doc_numero` · `telefono_contacto`
+**Campos (form-data):** `files`*· `nombre` · `apellido` · `edad` · `doc_tipo` · `doc_numero` · `telefono_contacto`
 (\\*obligatorio: foto con rostro. Validación: manda al menos `nombre` o `doc_numero`.)
 
 ```js
@@ -24,7 +28,9 @@ fd.append("telefono_contacto", "0412-1234567");
 const r = await fetch("/api/buscados", { method: "POST", body: fd });
 const data = await r.json();
 ```
+
 **Respuesta 201:**
+
 ```json
 {
   "codigo": "REE-CC66DA69",
@@ -41,6 +47,7 @@ const data = await r.json();
   ]
 }
 ```
+
 > Muestra `coincidencia`% y `confianza`. Al pulsar **"Es mi familiar"** revela
 > `ubicacion` y `telefono`. Si `es_menor=true`, `nombre`/`apellido` vienen `null`
 > (muéstralo como *"Menor protegido"*).
@@ -48,9 +55,10 @@ const data = await r.json();
 ---
 
 ## 🟢 RESCATISTA — `POST /encontrados`
+
 Registra a la persona encontrada; avisa si un familiar ya la buscaba.
 
-**Campos:** `files`* · `es_menor` (bool) · `nombre` · `apellido` · `doc_tipo` · `doc_numero` ·
+**Campos:** `files`*· `es_menor` (bool) · `nombre` · `apellido` · `doc_tipo` · `doc_numero` ·
 `refugio`* · `ubicacion` · `telefono_responsable`* · `doc_responsable` (*obligatorio si menor*) · `descripcion`
 
 ```js
@@ -63,7 +71,9 @@ fd.append("doc_responsable", "V-11111111"); // obligatorio si es_menor
 fd.append("descripcion", "cabello castaño");
 await fetch("/api/encontrados", { method: "POST", body: fd });
 ```
+
 **Respuesta 201:**
+
 ```json
 {
   "codigo": "REE-D38D8CF1",
@@ -74,6 +84,7 @@ await fetch("/api/encontrados", { method: "POST", body: fd });
   }
 }
 ```
+
 > Si `alerta` es `null`, nadie lo buscaba aún. Si trae datos, **muéstralos** (un
 > familiar ya busca a esta persona, con su teléfono).
 
@@ -82,29 +93,59 @@ await fetch("/api/encontrados", { method: "POST", body: fd });
 ## 🛡️ SUPERADMIN
 
 ### Login — `POST /admin/login`
-Body **JSON** (no form-data): `{"usuario":"admin","password":"reencuentros2026"}`.
-Devuelve un token que debes enviar como header en TODOS los endpoints de admin.
+
+Body **JSON** (no form-data): `{"usuario":"admin","password":"..."}`.
+Devuelve un **JWT** firmado (HS256) con expiración (`JWT_EXPIRES_MINUTES`, def. 60 min).
+Envialo como header en TODOS los endpoints de admin.
+
 ```js
 const r = await fetch("/api/admin/login", {
   method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ usuario: "admin", password: "reencuentros2026" })
+  body: JSON.stringify({ usuario: "admin", password: "..." })
 });
-const { token } = await r.json();          // guárdalo
+const { token } = await r.json();          // JWT — guárdalo
 // en cada llamada admin:
 fetch("/api/admin/personas", { headers: { Authorization: "Bearer " + token } });
 ```
-**Respuesta:** `{ "token": "ab92d2...", "tipo": "Bearer" }`.
-Sin token o token inválido → **HTTP 401**. (La contraseña se configura con la
-variable de entorno `ADMIN_PASSWORD`.)
+
+**Respuesta:** `{ "token": "eyJhbGci...", "tipo": "Bearer" }`.
+Sin token, token expirado o inválido → **HTTP 401**.
+
+> ⚠️ **Tokens previos a esta versión quedan invalidados** (cambio de formato).
+> Si el front guardó un token viejo, el próximo request va a recibir 401; simplemente
+> volver a loguearse.
+
+**Sobre la password:** el login valida **siempre contra la BD** (tabla `admins`,
+hash bcrypt — nunca en plano). Las variables `ADMIN_USER` / `ADMIN_PASSWORD` del
+`.env` se usan **solo la primera vez** para sembrar el admin inicial (si la tabla
+está vacía). Después se ignoran para el login. Para cambiar la password:
+
+```bash
+python -m app.cli change-password admin
+```
 
 > Todos los endpoints de abajo requieren el header `Authorization: Bearer <token>`.
 
 ### Comparar foto contra toda la base — `POST /buscar`
+
 **Campos:** `file`* · `limite` (def. 25) · `estado` (`buscada`|`encontrada`|vacío).
 Devuelve un array de candidatos (mismo formato que `coincidencias`).
 
+```js
+const fd = new FormData();
+fd.append("file", file);
+fd.append("limite", "25");
+const r = await fetch("/api/buscar", {
+  method: "POST",
+  headers: { Authorization: "Bearer " + token },  // <-- requerido
+  body: fd,
+});
+```
+
 ### Listar / moderar — `GET /admin/personas`
+
 Query: `limite`, `estado`, `moderacion` (`aprobada`|`rechazada`|`pendiente`).
+
 ```json
 [{ "person_id":"...", "estado":"encontrada", "es_menor":false, "nombre":"Juan",
    "refugio":"Refugio Central", "telefono":"0414-9999999", "codigo":"REE-...",
@@ -112,13 +153,17 @@ Query: `limite`, `estado`, `moderacion` (`aprobada`|`rechazada`|`pendiente`).
 ```
 
 ### Aprobar / rechazar — `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada`
+
 `valor` = `aprobada` | `rechazada` | `pendiente`. Las **rechazadas no aparecen** en búsquedas.
+
 ```js
 await fetch(`/api/admin/personas/${id}/moderacion?valor=rechazada`, { method: "PATCH" });
 ```
 
 ### Eliminar (contenido indebido) — `DELETE /admin/personas/{person_id}`
+
 Borra a la persona, sus fotos y sus filas.
+
 ```js
 await fetch(`/api/admin/personas/${id}`, { method: "DELETE" });
 ```
@@ -126,6 +171,7 @@ await fetch(`/api/admin/personas/${id}`, { method: "DELETE" });
 ---
 
 ## Referencia de campos de respuesta
+
 | Campo | Significado |
 |---|---|
 | `coincidencia` | % de parecido (0-100) para mostrar |

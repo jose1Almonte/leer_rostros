@@ -10,3 +10,9 @@ numpy
 opencv-python-headless
 insightface
 onnxruntime
+
+# Auth de admin: hash de password (bcrypt) + JWT firmado.
+# bcrypt<4.1: passlib 1.7.4 lee un atributo interno que se renombró en 4.1+.
+passlib[bcrypt]<1.8
+bcrypt<4.1
+PyJWT>=2.8,<3
