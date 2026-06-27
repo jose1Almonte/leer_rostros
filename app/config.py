@@ -21,14 +21,14 @@ class Settings(BaseSettings):
     # DigitalOcean Managed Postgres (con pgvector)
     database_url: str
 
-    # Reconocimiento facial.
-    # SFace + retinaface = mejor combinación según evaluación exhaustiva con fotos
-    # reales (mayor margen de seguridad: misma persona <=0.446, distintas >=0.683).
-    # Umbral 0.55 = 0 falsos positivos / 0 falsos negativos en las pruebas.
-    face_model: str = "SFace"
-    embedding_dim: int = 128
+    # Reconocimiento facial — InsightFace buffalo_l (ArcFace w600k_r50, 512-dim).
+    # buffalo_l es SOTA en benchmarks cross-pose (CFP-FP), entrenado con augmentación
+    # masiva de ángulo. Umbral y curva sigmoide a calibrar con evaluate.py.
+    embedding_dim: int = 512
     match_threshold: float = 0.55
-    face_detector: str = "retinaface"
+    min_face_quality: float = 0.50          # det_score mínimo de insightface (0–1)
+    confidence_sigmoid_k: float = 12.0      # pendiente de la curva sigmoide
+    confidence_sigmoid_midpoint: float = 0.40  # distancia donde confianza = 50 %
 
     @property
     def endpoint_url(self) -> str:

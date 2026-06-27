@@ -1,146 +1,584 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Reencuentros — Reconocimiento facial</title>
-<style>
-  :root {
-    --bg: #0f1320; --card: #1a2032; --line: #2a3350;
-    --txt: #e8ecf5; --muted: #9aa6c4; --accent: #4f8cff;
-    --ok: #2ecc71; --bad: #ff5a5a;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    background: var(--bg); color: var(--txt); line-height: 1.5;
-  }
-  header { padding: 28px 20px 8px; text-align: center; }
-  header h1 { margin: 0; font-size: 1.6rem; }
-  header p { color: var(--muted); margin: 6px 0 0; }
-  .wrap { max-width: 920px; margin: 0 auto; padding: 20px; display: grid; gap: 20px; grid-template-columns: 1fr 1fr; }
-  @media (max-width: 760px) { .wrap { grid-template-columns: 1fr; } }
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 20px; display: flex; flex-direction: column; gap: 12px;
-  }
-  .card h2 { margin: 0; font-size: 1.15rem; }
-  .card .hint { color: var(--muted); font-size: .86rem; margin-top: -6px; }
-  label { font-size: .85rem; color: var(--muted); }
-  input[type=text] {
-    width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--line);
-    background: #0d1120; color: var(--txt); font-size: .95rem;
-  }
-  input[type=file] { font-size: .85rem; color: var(--muted); }
-  .preview { width: 100%; height: 180px; object-fit: cover; border-radius: 8px; display: none; border: 1px solid var(--line); }
-  button {
-    background: var(--accent); color: white; border: 0; padding: 11px; border-radius: 8px;
-    font-size: .98rem; font-weight: 600; cursor: pointer;
-  }
-  button:disabled { opacity: .5; cursor: progress; }
-  .result { margin-top: 6px; font-size: .9rem; }
-  .match {
-    display: flex; gap: 12px; align-items: center; padding: 10px; border-radius: 10px;
-    background: #0d1120; border: 1px solid var(--line); margin-bottom: 8px;
-  }
-  .match img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; }
-  .badge { padding: 2px 9px; border-radius: 999px; font-size: .72rem; font-weight: 700; }
-  .badge.ok { background: rgba(46,204,113,.18); color: var(--ok); }
-  .badge.no { background: rgba(255,90,90,.15); color: var(--bad); }
-  .dist { color: var(--muted); font-size: .78rem; }
-  .empty { color: var(--muted); font-style: italic; }
-</style>
-</head>
-<body>
-  <header>
-    <h1>🔍 Reencuentros</h1>
-    <p>Reconocimiento facial para reunir personas desaparecidas con sus familias</p>
-  </header>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reencuentros — Reconocimiento facial</title>
+    <style>
+      :root {
+        --bg: #0f1320;
+        --card: #1a2032;
+        --line: #2a3350;
+        --txt: #e8ecf5;
+        --muted: #9aa6c4;
+        --accent: #4f8cff;
+        --ok: #2ecc71;
+        --bad: #ff5a5a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        background: var(--bg);
+        color: var(--txt);
+        line-height: 1.5;
+      }
+      header {
+        padding: 28px 20px 8px;
+        text-align: center;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.6rem;
+      }
+      header p {
+        color: var(--muted);
+        margin: 6px 0 0;
+      }
+      .wrap {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 20px;
+        display: grid;
+        gap: 20px;
+        grid-template-columns: 1fr 1fr;
+      }
+      @media (max-width: 760px) {
+        .wrap {
+          grid-template-columns: 1fr;
+        }
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .card h2 {
+        margin: 0;
+        font-size: 1.15rem;
+      }
+      .card .hint {
+        color: var(--muted);
+        font-size: 0.86rem;
+        margin-top: -6px;
+      }
+      label {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      input[type="text"] {
+        width: 100%;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: #0d1120;
+        color: var(--txt);
+        font-size: 0.95rem;
+      }
+      input[type="file"] {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      .preview {
+        width: 100%;
+        height: 180px;
+        object-fit: cover;
+        border-radius: 8px;
+        display: none;
+        border: 1px solid var(--line);
+      }
+      button {
+        background: var(--accent);
+        color: white;
+        border: 0;
+        padding: 11px;
+        border-radius: 8px;
+        font-size: 0.98rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: progress;
+      }
+      .result {
+        margin-top: 6px;
+        font-size: 0.9rem;
+      }
+      .match {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 10px;
+        border-radius: 10px;
+        background: #0d1120;
+        border: 1px solid var(--line);
+        margin-bottom: 8px;
+      }
+      .match img {
+        width: 64px;
+        height: 64px;
+        object-fit: cover;
+        border-radius: 8px;
+      }
+      .badge {
+        padding: 2px 9px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 700;
+      }
+      .badge.ok {
+        background: rgba(46, 204, 113, 0.18);
+        color: var(--ok);
+      }
+      .badge.no {
+        background: rgba(255, 90, 90, 0.15);
+        color: var(--bad);
+      }
+      .dist {
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+      .empty {
+        color: var(--muted);
+        font-style: italic;
+      }
+      .conf-wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 3px;
+      }
+      .conf-bar-bg {
+        flex: 1;
+        height: 5px;
+        background: #1e2840;
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .conf-bar {
+        height: 5px;
+        border-radius: 3px;
+        transition: width 0.4s;
+      }
+      .conf-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        min-width: 42px;
+        text-align: right;
+      }
+      .qual {
+        font-size: 0.72rem;
+        color: var(--muted);
+        margin-top: 1px;
+      }
+      .thumbs {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 4px;
+      }
+      .thumbs img {
+        width: 56px;
+        height: 56px;
+        object-fit: cover;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+      }
+      .match {
+        cursor: pointer;
+        transition: border-color 0.2s;
+      }
+      .match:hover {
+        border-color: var(--accent);
+      }
+      /* Modal */
+      .modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.75);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      .modal-overlay.open {
+        display: flex;
+      }
+      .modal {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 24px;
+        max-width: 500px;
+        width: 100%;
+        max-height: 85vh;
+        overflow-y: auto;
+        position: relative;
+      }
+      .modal-close {
+        position: absolute;
+        top: 12px;
+        right: 14px;
+        background: none;
+        border: none;
+        color: var(--muted);
+        font-size: 1.4rem;
+        cursor: pointer;
+        padding: 4px 8px;
+      }
+      .modal-close:hover {
+        color: var(--txt);
+      }
+      .modal h3 {
+        margin: 0 0 12px;
+        font-size: 1.2rem;
+      }
+      .modal img.main-photo {
+        width: 100%;
+        max-height: 280px;
+        object-fit: contain;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        margin-bottom: 14px;
+      }
+      .modal .field {
+        margin-bottom: 8px;
+        font-size: 0.9rem;
+      }
+      .modal .field span {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>🔍 Reencuentros</h1>
+      <p>
+        Reconocimiento facial para reunir personas desaparecidas con sus
+        familias
+      </p>
+    </header>
 
-  <div class="wrap">
-    <!-- Registrar -->
-    <div class="card">
-      <h2>1 · Registrar persona</h2>
-      <p class="hint">Sube la foto de a quién buscas (familiar) o de a quién encontraste (rescatista).</p>
-      <img id="prevReg" class="preview" />
-      <input type="file" id="fileReg" accept="image/*" />
-      <label>Nombre (opcional)</label>
-      <input type="text" id="nombre" placeholder="Ej: José Pérez" />
-      <label>Cédula / ID (opcional)</label>
-      <input type="text" id="ci" placeholder="Ej: 12345678" />
-      <label>Estado</label>
-      <input type="text" id="estado" value="desaparecida" />
-      <button id="btnReg">Registrar</button>
-      <div class="result" id="resReg"></div>
+    <div class="wrap">
+      <!-- Registrar -->
+      <div class="card">
+        <h2>1 · Registrar persona</h2>
+        <p class="hint">
+          Sube una o más fotos (frente, 3/4, perfil) para mayor robustez ante
+          distintos ángulos.
+        </p>
+        <input
+          type="file"
+          id="fileReg"
+          accept="image/jpeg,image/png,image/webp"
+          multiple
+        />
+        <div id="thumbsReg" class="thumbs"></div>
+        <label>Nombre (opcional)</label>
+        <input type="text" id="nombre" placeholder="Ej: José Pérez" />
+        <label>Cédula / ID (opcional)</label>
+        <input type="text" id="ci" placeholder="Ej: 12345678" />
+        <label>Estado</label>
+        <input type="text" id="estado" value="desaparecida" />
+        <button id="btnReg">Registrar</button>
+        <div class="result" id="resReg"></div>
+      </div>
+
+      <!-- Buscar -->
+      <div class="card">
+        <h2>2 · Buscar coincidencia</h2>
+        <p class="hint">
+          Sube una foto y el sistema busca los rostros más parecidos ya
+          registrados.
+        </p>
+        <img id="prevBus" class="preview" />
+        <input
+          type="file"
+          id="fileBus"
+          accept="image/jpeg,image/png,image/webp"
+        />
+        <button id="btnBus">Buscar match</button>
+        <div class="result" id="resBus"></div>
+      </div>
+
+      <!-- Agregar fotos -->
+      <div class="card">
+        <h2>3 · Agregar fotos a persona existente</h2>
+        <p class="hint">
+          Si el reconocimiento falla por el ángulo, agrega fotos extra a la
+          persona ya registrada.
+        </p>
+        <label>ID de la persona</label>
+        <input
+          type="text"
+          id="addFotosId"
+          placeholder="Pega el ID devuelto al registrar"
+        />
+        <input
+          type="file"
+          id="addFotosFiles"
+          accept="image/jpeg,image/png,image/webp"
+          multiple
+        />
+        <div id="thumbsAdd" class="thumbs"></div>
+        <button id="btnAddFotos">Agregar fotos</button>
+        <div class="result" id="resAddFotos"></div>
+      </div>
     </div>
 
-    <!-- Buscar -->
-    <div class="card">
-      <h2>2 · Buscar coincidencia</h2>
-      <p class="hint">Sube una foto y el sistema busca los rostros más parecidos ya registrados.</p>
-      <img id="prevBus" class="preview" />
-      <input type="file" id="fileBus" accept="image/*" />
-      <button id="btnBus">Buscar match</button>
-      <div class="result" id="resBus"></div>
+    <!-- Modal de detalle -->
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal" id="modalContent">
+        <button class="modal-close" id="modalClose">&times;</button>
+        <div id="modalBody"></div>
+      </div>
     </div>
-  </div>
 
-<script>
-const API = "/api";
+    <script>
+      // Si el frontend se sirve desde un puerto distinto a 80/443 (ej. Live Server
+      // de VS Code en :5500), redirige las peticiones API al nginx en localhost:80.
+      const API =
+        location.port && location.port !== "80" && location.port !== "443"
+          ? "http://localhost/api"
+          : "/api";
 
-function bindPreview(inputId, imgId) {
-  const inp = document.getElementById(inputId), img = document.getElementById(imgId);
-  inp.addEventListener("change", () => {
-    if (inp.files[0]) { img.src = URL.createObjectURL(inp.files[0]); img.style.display = "block"; }
-  });
-}
-bindPreview("fileReg", "prevReg");
-bindPreview("fileBus", "prevBus");
+      const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
-document.getElementById("btnReg").addEventListener("click", async () => {
-  const f = document.getElementById("fileReg").files[0];
-  const res = document.getElementById("resReg");
-  if (!f) { res.innerHTML = '<span class="empty">Selecciona una imagen.</span>'; return; }
-  const btn = document.getElementById("btnReg"); btn.disabled = true; res.textContent = "Procesando rostro y subiendo al bucket...";
-  const fd = new FormData();
-  fd.append("file", f);
-  fd.append("nombre", document.getElementById("nombre").value);
-  fd.append("ci", document.getElementById("ci").value);
-  fd.append("estado", document.getElementById("estado").value || "desaparecida");
-  try {
-    const r = await fetch(API + "/personas", { method: "POST", body: fd });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "Error");
-    res.innerHTML = `<span class="badge ok">Registrado</span> ID: <code>${data.id.slice(0,18)}…</code><br>
+      function filterImages(files) {
+        return [...files].filter((f) => ALLOWED_TYPES.includes(f.type));
+      }
+
+      function showThumbs(inputId, containerId) {
+        const inp = document.getElementById(inputId);
+        const container = document.getElementById(containerId);
+        inp.addEventListener("change", () => {
+          container.innerHTML = "";
+          const valid = filterImages(inp.files);
+          valid.forEach((f) => {
+            const img = document.createElement("img");
+            img.src = URL.createObjectURL(f);
+            container.appendChild(img);
+          });
+          if (!valid.length)
+            container.innerHTML =
+              '<span class="empty">Ninguna imagen válida seleccionada.</span>';
+        });
+      }
+      showThumbs("fileReg", "thumbsReg");
+      showThumbs("addFotosFiles", "thumbsAdd");
+
+      // Preview para búsqueda (single file)
+      document.getElementById("fileBus").addEventListener("change", () => {
+        const inp = document.getElementById("fileBus");
+        const img = document.getElementById("prevBus");
+        if (inp.files[0] && ALLOWED_TYPES.includes(inp.files[0].type)) {
+          img.src = URL.createObjectURL(inp.files[0]);
+          img.style.display = "block";
+        } else {
+          img.style.display = "none";
+        }
+      });
+
+      // --- Modal ---
+      const overlay = document.getElementById("modalOverlay");
+      document
+        .getElementById("modalClose")
+        .addEventListener("click", () => overlay.classList.remove("open"));
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) overlay.classList.remove("open");
+      });
+
+      async function openModal(persona) {
+        const pct = persona.confianza;
+        const barColor =
+          pct >= 70 ? "var(--ok)" : pct >= 40 ? "#f39c12" : "var(--bad)";
+        // Mostrar modal de inmediato con la foto principal, luego cargar el resto.
+        document.getElementById("modalBody").innerHTML = `
+          <h3>${persona.nombre || "Sin nombre"}</h3>
+          <img class="main-photo" src="${persona.image_url}" onerror="this.style.opacity=.3" />
+          <div id="modalExtraPhotos" class="thumbs" style="margin-bottom:12px"><span class="empty">Cargando fotos...</span></div>
+          <div class="field"><span>ID:</span> ${persona.id}</div>
+          <div class="field"><span>Cédula:</span> ${persona.ci || "—"}</div>
+          <div class="field"><span>Rol:</span> ${persona.rol || "—"}</div>
+          <div class="field"><span>Estado:</span> ${persona.estado}</div>
+          <div class="field"><span>Registrado:</span> ${new Date(persona.created_at).toLocaleString()}</div>
+          <hr style="border-color:var(--line);margin:12px 0">
+          <div class="field"><span>Distancia coseno:</span> ${persona.distancia.toFixed(4)}</div>
+          <div class="conf-wrap">
+            <div class="conf-bar-bg"><div class="conf-bar" style="width:${pct}%;background:${barColor}"></div></div>
+            <span class="conf-label" style="color:${barColor}">${pct}%</span>
+          </div>
+          <div class="field" style="margin-top:6px"><span>Calidad de registro:</span> ${Math.round(persona.calidad_rostro * 100)}%</div>
+          <div class="field">
+            <span class="badge ${persona.es_match ? "ok" : "no"}">${persona.es_match ? "✓ COINCIDE" : "✗ No coincide"}</span>
+          </div>
+        `;
+        overlay.classList.add("open");
+        // Fetch all photos on demand.
+        try {
+          const r = await fetch(`${API}/personas/${persona.id}/fotos`);
+          const urls = await r.json();
+          const container = document.getElementById("modalExtraPhotos");
+          if (urls.length > 1) {
+            container.innerHTML = urls
+              .map(
+                (url) =>
+                  `<img src="${url}" onerror="this.style.opacity=.3" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--line)" />`,
+              )
+              .join("");
+          } else {
+            container.innerHTML = "";
+          }
+        } catch (e) {
+          const container = document.getElementById("modalExtraPhotos");
+          if (container) container.innerHTML = "";
+        }
+      }
+
+      document.getElementById("btnReg").addEventListener("click", async () => {
+        const files = document.getElementById("fileReg").files;
+        const res = document.getElementById("resReg");
+        if (!files.length) {
+          res.innerHTML =
+            '<span class="empty">Selecciona al menos una imagen.</span>';
+          return;
+        }
+        const btn = document.getElementById("btnReg");
+        btn.disabled = true;
+        res.textContent = "Procesando rostro y subiendo al bucket...";
+        const fd = new FormData();
+        for (const f of document.getElementById("fileReg").files)
+          fd.append("files", f);
+        fd.append("nombre", document.getElementById("nombre").value);
+        fd.append("ci", document.getElementById("ci").value);
+        fd.append(
+          "estado",
+          document.getElementById("estado").value || "desaparecida",
+        );
+        try {
+          const r = await fetch(API + "/personas", {
+            method: "POST",
+            body: fd,
+          });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.detail || "Error");
+          res.innerHTML = `<span class="badge ok">Registrado</span> ID: <code>${data.id}</code><br>
       <a href="${data.image_url}" target="_blank" style="color:var(--accent)">Ver imagen en el bucket ↗</a>`;
-  } catch (e) { res.innerHTML = '<span class="badge no">Error</span> ' + e.message; }
-  finally { btn.disabled = false; }
-});
+        } catch (e) {
+          res.innerHTML = '<span class="badge no">Error</span> ' + e.message;
+        } finally {
+          btn.disabled = false;
+        }
+      });
 
-document.getElementById("btnBus").addEventListener("click", async () => {
-  const f = document.getElementById("fileBus").files[0];
-  const res = document.getElementById("resBus");
-  if (!f) { res.innerHTML = '<span class="empty">Selecciona una imagen.</span>'; return; }
-  const btn = document.getElementById("btnBus"); btn.disabled = true; res.textContent = "Buscando coincidencias...";
-  const fd = new FormData(); fd.append("file", f);
-  try {
-    const r = await fetch(API + "/buscar", { method: "POST", body: fd });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "Error");
-    if (!data.coincidencias.length) { res.innerHTML = '<span class="empty">No hay personas registradas todavía.</span>'; return; }
-    res.innerHTML = `<p class="dist">Umbral de match: distancia &lt; ${data.umbral}</p>` +
-      data.coincidencias.map(c => `
-        <div class="match">
+      document.getElementById("btnBus").addEventListener("click", async () => {
+        const f = document.getElementById("fileBus").files[0];
+        const res = document.getElementById("resBus");
+        if (!f) {
+          res.innerHTML = '<span class="empty">Selecciona una imagen.</span>';
+          return;
+        }
+        const btn = document.getElementById("btnBus");
+        btn.disabled = true;
+        res.textContent = "Buscando coincidencias...";
+        const fd = new FormData();
+        fd.append("file", f);
+        try {
+          const r = await fetch(API + "/buscar", { method: "POST", body: fd });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.detail || "Error");
+          if (!data.coincidencias.length) {
+            res.innerHTML =
+              '<span class="empty">No hay personas registradas todavía.</span>';
+            return;
+          }
+          res.innerHTML =
+            `<p class="dist">Umbral: ${data.umbral} · ${data.coincidencias.filter((c) => c.es_match).length} coincidencia(s)</p>` +
+            data.coincidencias
+              .map((c, i) => {
+                const pct = c.confianza;
+                const barColor =
+                  pct >= 70
+                    ? "var(--ok)"
+                    : pct >= 40
+                      ? "#f39c12"
+                      : "var(--bad)";
+                const qual = Math.round(c.calidad_rostro * 100);
+                return `
+        <div class="match" data-idx="${i}">
           <img src="${c.image_url}" onerror="this.style.opacity=.3" />
           <div style="flex:1">
-            <span class="badge ${c.es_match ? 'ok' : 'no'}">${c.es_match ? '✓ COINCIDE' : '✗ no coincide'}</span>
-            <div>${c.nombre || '<i>sin nombre</i>'} ${c.ci ? '· ' + c.ci : ''}</div>
-            <div class="dist">distancia: ${c.distancia.toFixed(4)} · estado: ${c.estado}</div>
+            <span class="badge ${c.es_match ? "ok" : "no"}">${c.es_match ? "✓ COINCIDE" : "✗ no coincide"}</span>
+            <div>${c.nombre || "<i>sin nombre</i>"} ${c.ci ? "· " + c.ci : ""}</div>
+            <div class="conf-wrap">
+              <div class="conf-bar-bg"><div class="conf-bar" style="width:${pct}%;background:${barColor}"></div></div>
+              <span class="conf-label" style="color:${barColor}">${pct}%</span>
+            </div>
+            <div class="qual">calidad registro: ${qual}% · estado: ${c.estado}</div>
           </div>
-        </div>`).join("");
-  } catch (e) { res.innerHTML = '<span class="badge no">Error</span> ' + e.message; }
-  finally { btn.disabled = false; }
-});
-</script>
-</body>
+        </div>`;
+              })
+              .join("");
+          // Bind click → modal
+          res.querySelectorAll(".match[data-idx]").forEach((el) => {
+            el.addEventListener("click", () =>
+              openModal(data.coincidencias[+el.dataset.idx]),
+            );
+          });
+        } catch (e) {
+          res.innerHTML = '<span class="badge no">Error</span> ' + e.message;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      document
+        .getElementById("btnAddFotos")
+        .addEventListener("click", async () => {
+          const pid = document.getElementById("addFotosId").value.trim();
+          const files = document.getElementById("addFotosFiles").files;
+          const res = document.getElementById("resAddFotos");
+          if (!pid) {
+            res.innerHTML =
+              '<span class="empty">Ingresa el ID de la persona.</span>';
+            return;
+          }
+          if (!files.length) {
+            res.innerHTML =
+              '<span class="empty">Selecciona al menos una foto.</span>';
+            return;
+          }
+          const btn = document.getElementById("btnAddFotos");
+          btn.disabled = true;
+          res.textContent = "Procesando...";
+          const fd = new FormData();
+          for (const f of files) fd.append("files", f);
+          try {
+            const r = await fetch(`${API}/personas/${pid}/fotos`, {
+              method: "POST",
+              body: fd,
+            });
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.detail || "Error");
+            res.innerHTML = `<span class="badge ok">Listo</span> ${data.embeddings_agregados} vector(es) agregado(s).`;
+          } catch (e) {
+            res.innerHTML = '<span class="badge no">Error</span> ' + e.message;
+          } finally {
+            btn.disabled = false;
+          }
+        });
+    </script>
+  </body>
 </html>

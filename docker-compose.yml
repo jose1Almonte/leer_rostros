@@ -2,6 +2,16 @@
 # Levanta Postgres con pgvector + el servicio FastAPI.
 # Las claves de Spaces y MATCH_THRESHOLD se leen del archivo .env.
 services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+
   db:
     image: pgvector/pgvector:pg16
     environment:
@@ -25,12 +35,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "8000:8000"
+    # Sin exposición directa al host: nginx hace de proxy interno.
+    # Para depurar la API directamente, cambia a: ports: ["8000:8000"]
     volumes:
-      # Cachea los pesos de DeepFace (~90 MB) entre reinicios.
-      - deepface_weights:/root/.deepface
+      # Cachea los pesos de InsightFace buffalo_l (~300 MB) entre reinicios.
+      - insightface_models:/root/.insightface
 
 volumes:
   pgdata:
-  deepface_weights:
+  insightface_models:
