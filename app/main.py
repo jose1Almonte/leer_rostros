@@ -20,6 +20,7 @@ from app.database import close_pool, get_pool, init_db
 from app import faces, storage
 from app.schemas import (
     AlertaFamiliar, Candidato, LoginBody, LoginResp, PersonaAdmin,
+    ReporteAdmin, ReporteCreado, ReporteFallaIn, ReportePublicacionIn,
     ResultadoBusqueda, ResultadoRegistro,
 )
 
@@ -188,9 +189,12 @@ async def lifespan(app: FastAPI):
 tags = [
     {"name": "familiar", "description": "Flujo del familiar que busca a alguien."},
     {"name": "rescatista", "description": "Flujo de quien encontró a una persona."},
-    {"name": "admin", "description": "Superadmin: buscar y comparar imágenes."},
+    {"name": "reportes", "description": "Reportar fallas de la página o publicaciones inadecuadas."},
+    {"name": "admin", "description": "Superadmin: buscar, moderar y ver reportes."},
     {"name": "sistema", "description": "Estado del servicio."},
 ]
+
+ESTADOS_REPORTE = ("pendiente", "revisado", "resuelto", "descartado")
 
 DESCRIPTION = """
 API de **reconocimiento facial** para reunir personas desaparecidas con sus familias.
@@ -238,9 +242,15 @@ una **alerta** con el nombre y teléfono del familiar.
 > **Protocolo de menor:** si `es_menor=true`, el `nombre`/`apellido` NO se guardan y en
 > las búsquedas aparece como *"Menor protegido"*.
 
+### 🚩 REPORTES (público)
+- `POST /reportes/falla` — reportar un bug/falla de la página (JSON: `descripcion`, `url?`, `contacto?`).
+- `POST /reportes/publicacion` — reportar una publicación/foto inadecuada (JSON: `person_id`, `descripcion`, `contacto?`).
+
 ### 🛡️ SUPERADMIN
 - `POST /buscar` — comparar una foto contra TODA la base (campo `file`, `limite`, `estado`).
 - `GET /admin/personas` — listar registros.
+- `GET /admin/reportes` — ver reportes recibidos (filtros `tipo`, `estado`).
+- `PATCH /admin/reportes/{id}/estado` — marcar un reporte (pendiente/revisado/resuelto/descartado).
 
 ---
 
@@ -452,3 +462,109 @@ def eliminar(person_id: str):
         conn.execute("DELETE FROM personas WHERE person_id = %s", (person_id,))
         conn.commit()
     return {"person_id": person_id, "eliminada": True, "fotos": len(rows)}
+
+
+# ----------------------------- REPORTES -----------------------------
+
+@app.post("/reportes/falla", response_model=ReporteCreado, status_code=201, tags=["reportes"],
+          summary="Reportar una falla de la página")
+async def reportar_falla(datos: ReporteFallaIn):
+    """Cualquier usuario puede reportar un problema/bug de la web. Queda en estado
+    `pendiente` para que el superadmin lo revise en `GET /admin/reportes`."""
+    with get_pool().connection() as conn:
+        row = conn.execute(
+            "INSERT INTO reportes (tipo, descripcion, url, contacto) "
+            "VALUES ('falla', %s, %s, %s) RETURNING id, tipo, estado, created_at",
+            (datos.descripcion.strip(), datos.url, datos.contacto),
+        ).fetchone()
+        conn.commit()
+    return ReporteCreado(id=str(row[0]), tipo=row[1], estado=row[2], created_at=row[3])
+
+
+@app.post("/reportes/publicacion", response_model=ReporteCreado, status_code=201, tags=["reportes"],
+          summary="Reportar una publicación o foto inadecuada")
+async def reportar_publicacion(datos: ReportePublicacionIn):
+    """Reporta una publicación inadecuada por su `person_id`. La publicación NO se
+    oculta automáticamente: queda registrada para que el superadmin la revise y
+    decida (puede rechazarla o eliminarla con los endpoints de moderación)."""
+    try:
+        pid = uuid.UUID(datos.person_id)
+    except ValueError:
+        raise HTTPException(422, "person_id inválido.")
+    with get_pool().connection() as conn:
+        existe = conn.execute(
+            "SELECT 1 FROM personas WHERE person_id = %s LIMIT 1", (pid,)
+        ).fetchone()
+        if not existe:
+            raise HTTPException(404, "No existe la publicación que intentas reportar.")
+        row = conn.execute(
+            "INSERT INTO reportes (tipo, descripcion, person_id, contacto) "
+            "VALUES ('publicacion', %s, %s, %s) RETURNING id, tipo, estado, created_at",
+            (datos.descripcion.strip(), pid, datos.contacto),
+        ).fetchone()
+        conn.commit()
+    return ReporteCreado(id=str(row[0]), tipo=row[1], estado=row[2], created_at=row[3])
+
+
+@app.get("/admin/reportes", response_model=list[ReporteAdmin], tags=["admin"],
+         dependencies=[Depends(requiere_admin)],
+         summary="Superadmin: ver reportes (fallas y publicaciones)")
+def listar_reportes(
+    tipo: str | None = None, estado: str | None = None, limite: int = 100,
+):
+    """Lista los reportes recibidos, del más reciente al más antiguo. Filtra por
+    `tipo` ('falla' | 'publicacion') y/o `estado`. Los de publicación traen el
+    contexto de la publicación reportada (nombre, foto, estado de moderación)."""
+    conds, args = [], []
+    if tipo in ("falla", "publicacion"):
+        conds.append("r.tipo = %s")
+        args.append(tipo)
+    if estado in ESTADOS_REPORTE:
+        conds.append("r.estado = %s")
+        args.append(estado)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    args.append(limite)
+    with get_pool().connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT r.id, r.tipo, r.descripcion, r.estado, r.person_id, r.url, r.contacto,
+                   r.created_at, p.nombre, p.estado, p.image_url, p.moderacion
+            FROM reportes r
+            LEFT JOIN LATERAL (
+                SELECT nombre, estado, image_url, moderacion FROM personas
+                WHERE person_id = r.person_id ORDER BY created_at LIMIT 1
+            ) p ON true
+            {where}
+            ORDER BY r.created_at DESC LIMIT %s
+            """,
+            tuple(args),
+        ).fetchall()
+    return [
+        ReporteAdmin(
+            id=str(r[0]), tipo=r[1], descripcion=r[2], estado=r[3],
+            person_id=str(r[4]) if r[4] else None, url=r[5], contacto=r[6], created_at=r[7],
+            pub_nombre=r[8], pub_estado=r[9], pub_image_url=r[10], pub_moderacion=r[11],
+        )
+        for r in rows
+    ]
+
+
+@app.patch("/admin/reportes/{reporte_id}/estado", tags=["admin"],
+           dependencies=[Depends(requiere_admin)],
+           summary="Superadmin: cambiar el estado de un reporte")
+def cambiar_estado_reporte(reporte_id: str, valor: str):
+    """`valor` = `pendiente` | `revisado` | `resuelto` | `descartado`."""
+    if valor not in ESTADOS_REPORTE:
+        raise HTTPException(400, f"valor debe ser uno de {ESTADOS_REPORTE}")
+    try:
+        rid = uuid.UUID(reporte_id)
+    except ValueError:
+        raise HTTPException(422, "reporte_id inválido.")
+    with get_pool().connection() as conn:
+        n = conn.execute(
+            "UPDATE reportes SET estado = %s WHERE id = %s", (valor, rid)
+        ).rowcount
+        conn.commit()
+    if not n:
+        raise HTTPException(404, "No existe ese reporte")
+    return {"id": reporte_id, "estado": valor}
