@@ -1,9 +1,9 @@
 """Servicio FastAPI de reencuentros — dos flujos + superadmin.
 
 - POST /buscados    (FAMILIAR)   registra una búsqueda y devuelve los encontrados
-                                 más parecidos (con % de coincidencia).
+                                     más parecidos (con % de coincidencia).
 - POST /encontrados (RESCATISTA) registra a una persona hallada y avisa si un
-                                 familiar ya la estaba buscando.
+                                     familiar ya la estaba buscando.
 - POST /buscar      (ADMIN)      compara una foto contra TODA la base.
 - GET  /admin/personas           lista todos los registros.
 """
@@ -13,12 +13,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 
-# psycopg (database) ANTES que faces (TensorFlow) para evitar crash nativo.
-from app.config import get_settings
-from app.database import close_pool, get_pool, init_db
-from app import faces, storage
+from app import faces
 from app.auth import (
-    Admin,
     create_access_token,
     get_admin_by_username,
     get_current_admin,
@@ -26,6 +22,10 @@ from app.auth import (
     touch_last_login,
     verify_password,
 )
+from app.config import get_settings
+from app.database import close_pool, get_pool, init_db
+from app.domain import MatchingPolicy, MenoresPrivacy
+from app.repositories import PersonaRepository
 from app.schemas import (
     AlertaFamiliar,
     Candidato,
@@ -37,34 +37,25 @@ from app.schemas import (
 )
 
 CONTENT_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
-# Umbrales calibrados a la distancia coseno de InsightFace buffalo_l (ArcFace).
-CONF_ALTA = 0.40
-CONF_MEDIA = 0.55
 LIMITE_MAX = 50  # tope de coincidencias que el front puede pedir
 
-# columnas de dominio que devuelve la búsqueda (orden fijo, consumido por _fila_a_candidato)
-_COLS = (
-    "person_id, estado, es_menor, nombre, apellido, edad, refugio, ubicacion, "
-    "telefono_responsable, telefono_contacto, descripcion, image_url"
-)
+# Module-level policy and repository (instantiated in lifespan)
+_policy: MatchingPolicy | None = None
+_repo: PersonaRepository | None = None
 
 
-def _sel(alias: str) -> str:
-    """`_COLS` con un alias de tabla delante de cada columna (p. ej. 'p2.person_id, ...')."""
-    return ", ".join(f"{alias}.{c.strip()}" for c in _COLS.split(","))
+def get_policy() -> MatchingPolicy:
+    """Get the matching policy instance."""
+    if _policy is None:
+        raise RuntimeError("Policy not initialized. Call lifespan first.")
+    return _policy
 
 
-def nivel_confianza(d: float) -> str:
-    if d < CONF_ALTA:
-        return "alta"
-    if d < CONF_MEDIA:
-        return "media"
-    return "baja"
-
-
-def pct_coincidencia(d: float) -> int:
-    # Sigmoide calibrada de buffalo_l (ver faces.distance_to_confidence).
-    return int(round(faces.distance_to_confidence(d)))
+def get_repo() -> PersonaRepository:
+    """Get the persona repository instance."""
+    if _repo is None:
+        raise RuntimeError("Repository not initialized. Call lifespan first.")
+    return _repo
 
 
 def gen_codigo() -> str:
@@ -95,127 +86,32 @@ def _embedding_consulta(procesadas):
     return procesadas[0][2][0][0] if procesadas else None
 
 
-def _insertar_fotos(conn, person_id, datos: dict, procesadas):
-    """Inserta una fila en `personas` por foto y sus vectores en `persona_embeddings`."""
-    urls = []
-    for data, ct, embs in procesadas:
-        ext = CONTENT_EXT.get(ct, "jpg")
-        foto_id = uuid.uuid4()
-        key = f"personas/{foto_id}.{ext}"
-        url = storage.upload_image(data, key, ct)
-        conn.execute(
-            """
-            INSERT INTO personas
-              (id, person_id, estado, es_menor, nombre, apellido, edad, doc_tipo,
-               doc_numero, telefono_contacto, refugio, telefono_responsable,
-               doc_responsable, descripcion, ubicacion, codigo, image_url, image_key)
-            VALUES (%(id)s, %(pid)s, %(estado)s, %(menor)s, %(nombre)s, %(apellido)s, %(edad)s,
-                    %(doc_tipo)s, %(doc_numero)s, %(tel_contacto)s, %(refugio)s, %(tel_resp)s,
-                    %(doc_resp)s, %(descripcion)s, %(ubicacion)s, %(codigo)s, %(url)s, %(key)s)
-            """,
-            {**datos, "id": foto_id, "pid": person_id, "url": url, "key": key},
-        )
-        for emb, calidad in embs:
-            conn.execute(
-                "INSERT INTO persona_embeddings (foto_id, embedding, calidad_rostro) "
-                "VALUES (%s, %s, %s)",
-                (foto_id, emb, calidad),
-            )
-        urls.append(url)
-    return urls
-
-
-def _buscar_mejor_por_persona(conn, embedding, where: str, params: tuple, limite: int):
-    """Mejor coincidencia por persona: para cada `person_id` toma su embedding más cercano.
-
-    `where` filtra las filas de `personas` (estado/moderación); `params` son sus valores.
-    """
-    return conn.execute(
-        f"""
-        SELECT {_sel("p2")}, b.distancia
-        FROM (
-            SELECT pe.foto_id, p.person_id,
-                   pe.embedding <=> %s AS distancia,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY p.person_id ORDER BY pe.embedding <=> %s ASC
-                   ) AS rn
-            FROM persona_embeddings pe
-            JOIN personas p ON p.id = pe.foto_id
-            {where}
-        ) b
-        JOIN personas p2 ON p2.id = b.foto_id
-        WHERE b.rn = 1
-        ORDER BY b.distancia ASC
-        LIMIT %s
-        """,
-        (embedding, embedding, *params, limite),
-    ).fetchall()
-
-
-def _buscar_por_estado(conn, embedding, estado: str, limite: int):
-    return _buscar_mejor_por_persona(
-        conn,
-        embedding,
-        "WHERE p.estado = %s AND p.moderacion = 'aprobada'",
-        (estado,),
-        limite,
-    )
-
-
-def _fila_a_candidato(r) -> Candidato:
-    (
-        person_id,
-        estado,
-        es_menor,
-        nombre,
-        apellido,
-        edad,
-        refugio,
-        ubicacion,
-        tel_resp,
-        tel_contacto,
-        descripcion,
-        image_url,
-        distancia,
-    ) = r
-    d = float(distancia)
-    return Candidato(
-        person_id=str(person_id),
-        estado=estado,
-        es_menor=bool(es_menor),
-        nombre=None if es_menor else nombre,  # protocolo de protección
-        apellido=None if es_menor else apellido,
-        edad=edad,
-        refugio=refugio,
-        ubicacion=ubicacion or refugio,
-        telefono=tel_resp or tel_contacto,
-        descripcion=descripcion,
-        image_url=image_url,
-        distancia=round(d, 4),
-        coincidencia=pct_coincidencia(d),
-        confianza=nivel_confianza(d),
-    )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _policy, _repo
+
     try:
         init_db()
     except Exception:
         # Otro worker ganó la carrera de creación de esquema; al reintentar ya existe.
-        try:
+        from contextlib import suppress
+
+        with suppress(Exception):
             init_db()
-        except Exception:
-            pass
-    get_pool()
+
+    pool = get_pool()
     faces.warmup()
+
+    # Instantiate policy and repository
+    s = get_settings()
+    _policy = MatchingPolicy(threshold=s.match_threshold)
+    _repo = PersonaRepository(pool=pool, policy=_policy)
 
     # Seed del primer admin desde env vars (idempotente).
     # Si la tabla `admins` está vacía, crea el admin con admin_user/admin_password.
     # Después de esto, esos env vars se IGNORAN para el login (siempre se valida contra BD).
-    s = get_settings()
     if s.admin_user and s.admin_password:
-        with get_pool().connection() as conn:
+        with pool.connection() as conn:
             if get_admin_by_username(conn, s.admin_user) is None:
                 conn.execute(
                     "INSERT INTO admins (username, password_hash) VALUES (%s, %s)",
@@ -228,7 +124,7 @@ async def lifespan(app: FastAPI):
                     flush=True,
                 )
     else:
-        with get_pool().connection() as conn:
+        with pool.connection() as conn:
             any_admin = conn.execute("SELECT 1 FROM admins LIMIT 1").fetchone()
         if any_admin is None:
             print(
@@ -300,8 +196,8 @@ una **alerta** con el nombre y teléfono del familiar.
 |---|---|---|---|
 | `files` | archivo(s) | **Sí** (con rostro) | foto.jpg |
 | `es_menor` | bool | no (def. `false`) | `true` |
-| `nombre` | texto | no (se ignora si `es_menor`) | `Juan` |
-| `apellido` | texto | no (se ignora si `es_menor`) | `Gómez` |
+| `nombre` | texto | no | `Juan` |
+| `apellido` | texto | no | `Gómez` |
 | `doc_tipo` / `doc_numero` | texto | no | `V` / `87654321` |
 | `refugio` | texto | **Sí** | `Refugio Central, Caracas` |
 | `ubicacion` | texto | no | `Plaza Bolívar` |
@@ -309,35 +205,35 @@ una **alerta** con el nombre y teléfono del familiar.
 | `doc_responsable` | texto | **Sí si `es_menor`** | `V-11111111` |
 | `descripcion` | texto | no | `cabello castaño, 1.20 m` |
 
-> **Protocolo de menor:** si `es_menor=true`, el `nombre`/`apellido` NO se guardan y en
-> las búsquedas aparece como *"Menor protegido"*.
+> **Protocolo de menor:** si `es_menor=true`, el `nombre`/`apellido` se guardan en la BD
+> pero se ocultan en las respuestas de la API (protección de menores).
 
-    ### 🛡️ SUPERADMIN
+### 🛡️ SUPERADMIN
 
-    Todos los endpoints de abajo requieren el header **`Authorization: Bearer <token>`**.
-    El token se obtiene de `POST /admin/login` (abajo).
+Todos los endpoints de abajo requieren el header **`Authorization: Bearer <token>`**.
+El token se obtiene de `POST /admin/login` (abajo).
 
-    - `POST /admin/login` — login. Body JSON `{"usuario":"...","password":"..."}`. Devuelve
-      un **JWT** firmado (HS256) con expiración (`JWT_EXPIRES_MINUTES`, def. 60 min). La
-      validación es **siempre contra la BD** (tabla `admins`, hash bcrypt). La primera
-      vez, el admin se siembra automáticamente desde `ADMIN_USER` / `ADMIN_PASSWORD` del
-      `.env` si la tabla está vacía. Cambiá la password con
-      `python -m app.cli change-password <usuario>`.
-    - `POST /buscar` — comparar una foto contra TODA la base (campos `file`, `limite`, `estado`).
-    - `GET /admin/personas` — listar registros. Query: `limite`, `estado`, `moderacion`.
-    - `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
-    - `DELETE /admin/personas/{person_id}` — borrar.
+- `POST /admin/login` — login. Body JSON `{"usuario":"...","password":"..."}`. Devuelve
+  un **JWT** firmado (HS256) con expiración (`JWT_EXPIRES_MINUTES`, def. 60 min). La
+  validación es **siempre contra la BD** (tabla `admins`, hash bcrypt). La primera
+  vez, el admin se siembra automáticamente desde `ADMIN_USER` / `ADMIN_PASSWORD` del
+  `.env` si la tabla está vacía. Cambiá la password con
+  `python -m app.cli change-password <usuario>`.
+- `POST /buscar` — comparar una foto contra TODA la base (campos `file`, `limite`, `estado`).
+- `GET /admin/personas` — listar registros. Query: `limite`, `estado`, `moderacion`.
+- `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
+- `DELETE /admin/personas/{person_id}` — borrar.
 
-    **Errores comunes en endpoints de admin:**
+**Errores comunes en endpoints de admin:**
 
-    | Código | Cuándo |
-    |---|---|
-    | `401` | Sin header `Authorization`, token mal firmado, token expirado, o el admin ya no existe |
-    | `403` | El admin existe pero está `is_active=false` (desactivado) |
+| Código | Cuándo |
+|---|---|
+| `401` | Sin header `Authorization`, token mal firmado, token expirado, o el admin ya no existe |
+| `403` | El admin existe pero está `is_active=false` (desactivado) |
 
-    El body de error siempre es `{"detail": "..."}`. **No hay endpoint de logout**: el
-    token vive en el front y expira solo; al recibir 401, el front debe volver a llamar
-    a `POST /admin/login`.
+El body de error siempre es `{"detail": "..."}`. **No hay endpoint de logout**: el
+token vive en el front y expira solo; al recibir 401, el front debe volver a llamar
+a `POST /admin/login`.
 
 ---
 
@@ -427,28 +323,28 @@ async def registrar_busqueda(
     embedding = _embedding_consulta(procesadas)
     person_id = uuid.uuid4()
     codigo = gen_codigo()
-    datos = dict(
-        estado="buscada",
-        menor=False,
-        nombre=nombre,
-        apellido=apellido,
-        edad=edad,
-        doc_tipo=doc_tipo,
-        doc_numero=doc_numero,
-        tel_contacto=telefono_contacto,
-        refugio=None,
-        tel_resp=None,
-        doc_resp=None,
-        descripcion=None,
-        ubicacion=None,
-        codigo=codigo,
-    )
-    with get_pool().connection() as conn:
-        _insertar_fotos(conn, person_id, datos, procesadas)
-        encontrados = _buscar_por_estado(conn, embedding, "encontrada", limite)
-        conn.commit()
+    datos = {
+        "estado": "buscada",
+        "menor": False,
+        "nombre": nombre,
+        "apellido": apellido,
+        "edad": edad,
+        "doc_tipo": doc_tipo,
+        "doc_numero": doc_numero,
+        "tel_contacto": telefono_contacto,
+        "refugio": None,
+        "tel_resp": None,
+        "doc_resp": None,
+        "descripcion": None,
+        "ubicacion": None,
+        "codigo": codigo,
+    }
 
-    candidatos = [_fila_a_candidato(r) for r in encontrados]
+    repo = get_repo()
+    repo.add(person_id, datos, procesadas)
+    encontrados = repo.search_by_estado(embedding, "encontrada", limite)
+
+    candidatos = [MenoresPrivacy(Candidato(**d)) for d in encontrados]
     return ResultadoBusqueda(
         codigo=codigo, total=len(candidatos), coincidencias=candidatos
     )
@@ -498,40 +394,45 @@ async def registrar_encontrado(
     embedding = _embedding_consulta(procesadas)
     person_id = uuid.uuid4()
     codigo = gen_codigo()
-    datos = dict(
-        estado="encontrada",
-        menor=es_menor,
-        nombre=None if es_menor else nombre,  # protocolo de protección
-        apellido=None if es_menor else apellido,
-        edad=None,
-        doc_tipo=doc_tipo,
-        doc_numero=doc_numero,
-        tel_contacto=None,
-        refugio=refugio,
-        tel_resp=telefono_responsable,
-        doc_resp=doc_responsable,
-        descripcion=descripcion,
-        ubicacion=ubicacion,
-        codigo=codigo,
-    )
-    with get_pool().connection() as conn:
-        _insertar_fotos(conn, person_id, datos, procesadas)
-        buscados = _buscar_por_estado(conn, embedding, "buscada", 1)
-        conn.commit()
+
+    # FIX: Store names as-is, even for minors. Privacy masking happens at response boundary.
+    datos = {
+        "estado": "encontrada",
+        "menor": es_menor,
+        "nombre": nombre,
+        "apellido": apellido,
+        "edad": None,
+        "doc_tipo": doc_tipo,
+        "doc_numero": doc_numero,
+        "tel_contacto": None,
+        "refugio": refugio,
+        "tel_resp": telefono_responsable,
+        "doc_resp": doc_responsable,
+        "descripcion": descripcion,
+        "ubicacion": ubicacion,
+        "codigo": codigo,
+    }
+
+    repo = get_repo()
+    repo.add(person_id, datos, procesadas)
+    buscados = repo.search_by_estado(embedding, "buscada", 1)
 
     alerta = None
     if buscados:
-        r = buscados[0]
-        d = float(r[-1])
-        if d < CONF_MEDIA:  # coincidencia real (alta/media)
+        best = buscados[0]
+        d = best["distancia"]
+        if get_policy().is_match(d):
             alerta = AlertaFamiliar(
-                person_id=str(r[0]),
-                familiar_nombre=r[3],
-                familiar_telefono=r[9],
-                image_url=r[11],
-                coincidencia=pct_coincidencia(d),
-                confianza=nivel_confianza(d),
+                person_id=best["person_id"],
+                familiar_nombre=best["nombre"],
+                familiar_telefono=best["telefono"],
+                image_url=best["image_url"],
+                coincidencia=best["coincidencia"],
+                confianza=best["confianza"],
+                es_menor=best["es_menor"],
             )
+            alerta = MenoresPrivacy(alerta)
+
     return ResultadoRegistro(codigo=codigo, person_id=str(person_id), alerta=alerta)
 
 
@@ -554,14 +455,13 @@ async def buscar_admin(
     try:
         embedding, _ = faces.embedding_from_bytes(data)
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from None
+
     limite = max(1, min(LIMITE_MAX, limite))
-    filtra = estado in ("buscada", "encontrada")
-    where = "WHERE p.estado = %s" if filtra else ""
-    params = (estado,) if filtra else ()
-    with get_pool().connection() as conn:
-        rows = _buscar_mejor_por_persona(conn, embedding, where, params, limite)
-    return [_fila_a_candidato(r) for r in rows]
+    repo = get_repo()
+    results = repo.search_admin(embedding, estado, limite)
+    candidatos = [MenoresPrivacy(Candidato(**d)) for d in results]
+    return candidatos
 
 
 @app.get(
@@ -574,46 +474,10 @@ async def buscar_admin(
 )
 def listar(limite: int = 100, estado: str | None = None, moderacion: str | None = None):
     """Lista registros. Filtra por estado y/o moderación (para revisar/aprobar)."""
-    conds, args = [], []
-    if estado in ("buscada", "encontrada"):
-        conds.append("estado = %s")
-        args.append(estado)
-    if moderacion in ("aprobada", "rechazada", "pendiente"):
-        conds.append("moderacion = %s")
-        args.append(moderacion)
-    where = ("WHERE " + " AND ".join(conds)) if conds else ""
-    args.append(limite)
-    with get_pool().connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT person_id, max(estado), bool_or(es_menor), max(nombre), max(apellido),
-                   max(edad), max(doc_numero), max(refugio), max(ubicacion),
-                   coalesce(max(telefono_responsable), max(telefono_contacto)),
-                   max(codigo), max(moderacion), array_agg(image_url), min(created_at)
-            FROM personas {where}
-            GROUP BY person_id ORDER BY min(created_at) DESC LIMIT %s
-            """,
-            tuple(args),
-        ).fetchall()
-    return [
-        PersonaAdmin(
-            person_id=str(r[0]),
-            estado=r[1],
-            es_menor=bool(r[2]),
-            nombre=r[3],
-            apellido=r[4],
-            edad=r[5],
-            doc=r[6],
-            refugio=r[7],
-            ubicacion=r[8],
-            telefono=r[9],
-            codigo=r[10],
-            moderacion=r[11],
-            fotos=list(r[12]),
-            created_at=r[13],
-        )
-        for r in rows
-    ]
+    repo = get_repo()
+    results = repo.list_admin(limite, estado, moderacion)
+    personas = [MenoresPrivacy(PersonaAdmin(**d)) for d in results]
+    return personas
 
 
 @app.patch(
@@ -627,12 +491,9 @@ def moderar(person_id: str, valor: str):
     """`valor` = `aprobada` | `rechazada` | `pendiente`. Las rechazadas no aparecen en búsquedas."""
     if valor not in ("aprobada", "rechazada", "pendiente"):
         raise HTTPException(400, "valor debe ser 'aprobada', 'rechazada' o 'pendiente'")
-    with get_pool().connection() as conn:
-        n = conn.execute(
-            "UPDATE personas SET moderacion = %s WHERE person_id = %s",
-            (valor, person_id),
-        ).rowcount
-        conn.commit()
+
+    repo = get_repo()
+    n = repo.set_moderacion(person_id, valor)
     if not n:
         raise HTTPException(404, "No existe esa persona")
     return {"person_id": person_id, "moderacion": valor, "fotos_actualizadas": n}
@@ -647,17 +508,8 @@ def moderar(person_id: str, valor: str):
 )
 def eliminar(person_id: str):
     """Borra la persona, sus fotos del almacenamiento y sus filas de la BD."""
-    with get_pool().connection() as conn:
-        rows = conn.execute(
-            "SELECT image_key FROM personas WHERE person_id = %s", (person_id,)
-        ).fetchall()
-        if not rows:
-            raise HTTPException(404, "No existe esa persona")
-        for (key,) in rows:
-            try:
-                storage.delete_image(key)
-            except Exception:
-                pass
-        conn.execute("DELETE FROM personas WHERE person_id = %s", (person_id,))
-        conn.commit()
-    return {"person_id": person_id, "eliminada": True, "fotos": len(rows)}
+    repo = get_repo()
+    fotos = repo.delete(person_id)
+    if not fotos:
+        raise HTTPException(404, "No existe esa persona")
+    return {"person_id": person_id, "eliminada": True, "fotos": fotos}
