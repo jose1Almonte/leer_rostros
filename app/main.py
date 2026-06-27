@@ -8,8 +8,9 @@
 - GET  /admin/personas           lista todos los registros.
 """
 
-import uuid
 from contextlib import asynccontextmanager
+from functools import wraps
+from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 
@@ -24,10 +25,9 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.database import close_pool, get_pool, init_db
-from app.domain import MatchingPolicy, MenoresPrivacy
+from app.domain import MatchingPolicy
 from app.repositories import PersonaRepository
 from app.schemas import (
-    AlertaFamiliar,
     Candidato,
     LoginBody,
     LoginResp,
@@ -35,9 +35,20 @@ from app.schemas import (
     ResultadoBusqueda,
     ResultadoRegistro,
 )
-
-CONTENT_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
-LIMITE_MAX = 50  # tope de coincidencias que el front puede pedir
+from app.use_cases import (
+    BuscarAdmin,
+    EliminarPersona,
+    ListarPersonasAdmin,
+    ModerarPersona,
+    RegistrarBusqueda,
+    RegistrarEncontrado,
+)
+from app.use_cases._exceptions import (
+    ModificacionInvalidaError,
+    PersonaNotFoundError,
+    PersonaValidationError,
+    RostroNoDetectadoError,
+)
 
 # Module-level policy and repository (instantiated in lifespan)
 _policy: MatchingPolicy | None = None
@@ -56,10 +67,6 @@ def get_repo() -> PersonaRepository:
     if _repo is None:
         raise RuntimeError("Repository not initialized. Call lifespan first.")
     return _repo
-
-
-def gen_codigo() -> str:
-    return "REE-" + uuid.uuid4().hex[:8].upper()
 
 
 async def _procesar_fotos(files: list[UploadFile]):
@@ -81,9 +88,18 @@ async def _procesar_fotos(files: list[UploadFile]):
     return procesadas
 
 
-def _embedding_consulta(procesadas):
-    """Embedding con el que se buscan coincidencias: el base de la primera foto válida."""
-    return procesadas[0][2][0][0] if procesadas else None
+def _use_case_execute(execute_fn, **kwargs):
+    """Call a sync use case execute() with domain exception mapping."""
+    try:
+        return execute_fn(**kwargs)
+    except PersonaValidationError as e:
+        raise HTTPException(422, e.message) from None
+    except RostroNoDetectadoError as e:
+        raise HTTPException(422, e.message) from None
+    except PersonaNotFoundError as e:
+        raise HTTPException(404, e.message) from None
+    except ModificacionInvalidaError as e:
+        raise HTTPException(400, e.message) from None
 
 
 @asynccontextmanager
@@ -155,7 +171,7 @@ tags = [
 # Respuestas de error que Swagger debe mostrar para los endpoints protegidos por
 # `get_current_admin`. Sin esto, /api/docs no exhibe los 401/403 que el dev debe
 # manejar en el front.
-_ADMIN_RESPONSES = {
+_ADMIN_RESPONSES: dict[int | str, dict[str, Any]] = {
     401: {
         "description": "Sin token, token expirado, token mal firmado, o admin inexistente."
     },
@@ -311,42 +327,17 @@ async def registrar_busqueda(
     ),
 ):
     procesadas = await _procesar_fotos(files)
-    # --- Validaciones ---
-    if not procesadas:
-        raise HTTPException(422, "No se detectó ningún rostro en la(s) foto(s).")
-    if not (doc_numero or (nombre and nombre.strip())):
-        raise HTTPException(
-            422, "Indica al menos el nombre o el número de identificación."
-        )
-
-    limite = max(1, min(LIMITE_MAX, limite))
-    embedding = _embedding_consulta(procesadas)
-    person_id = uuid.uuid4()
-    codigo = gen_codigo()
-    datos = {
-        "estado": "buscada",
-        "menor": False,
-        "nombre": nombre,
-        "apellido": apellido,
-        "edad": edad,
-        "doc_tipo": doc_tipo,
-        "doc_numero": doc_numero,
-        "tel_contacto": telefono_contacto,
-        "refugio": None,
-        "tel_resp": None,
-        "doc_resp": None,
-        "descripcion": None,
-        "ubicacion": None,
-        "codigo": codigo,
-    }
-
-    repo = get_repo()
-    repo.add(person_id, datos, procesadas)
-    encontrados = repo.search_by_estado(embedding, "encontrada", limite)
-
-    candidatos = [MenoresPrivacy(Candidato(**d)) for d in encontrados]
-    return ResultadoBusqueda(
-        codigo=codigo, total=len(candidatos), coincidencias=candidatos
+    use_case = RegistrarBusqueda(get_repo(), get_policy())
+    return _use_case_execute(
+        use_case.execute,
+        procesadas=procesadas,
+        nombre=nombre,
+        apellido=apellido,
+        edad=edad,
+        doc_tipo=doc_tipo,
+        doc_numero=doc_numero,
+        telefono_contacto=telefono_contacto,
+        limite=limite,
     )
 
 
@@ -379,61 +370,21 @@ async def registrar_encontrado(
     descripcion: str | None = Form(None, description="Descripción física básica."),
 ):
     procesadas = await _procesar_fotos(files)
-    # --- Validaciones ---
-    if not procesadas:
-        raise HTTPException(422, "No se detectó ningún rostro en la(s) foto(s).")
-    if not refugio or not refugio.strip():
-        raise HTTPException(422, "El refugio actual es obligatorio.")
-    if not telefono_responsable or not telefono_responsable.strip():
-        raise HTTPException(422, "El teléfono del responsable es obligatorio.")
-    if es_menor and not (doc_responsable and doc_responsable.strip()):
-        raise HTTPException(
-            422, "Para un menor, la identificación del responsable es obligatoria."
-        )
-
-    embedding = _embedding_consulta(procesadas)
-    person_id = uuid.uuid4()
-    codigo = gen_codigo()
-
-    # FIX: Store names as-is, even for minors. Privacy masking happens at response boundary.
-    datos = {
-        "estado": "encontrada",
-        "menor": es_menor,
-        "nombre": nombre,
-        "apellido": apellido,
-        "edad": None,
-        "doc_tipo": doc_tipo,
-        "doc_numero": doc_numero,
-        "tel_contacto": None,
-        "refugio": refugio,
-        "tel_resp": telefono_responsable,
-        "doc_resp": doc_responsable,
-        "descripcion": descripcion,
-        "ubicacion": ubicacion,
-        "codigo": codigo,
-    }
-
-    repo = get_repo()
-    repo.add(person_id, datos, procesadas)
-    buscados = repo.search_by_estado(embedding, "buscada", 1)
-
-    alerta = None
-    if buscados:
-        best = buscados[0]
-        d = best["distancia"]
-        if get_policy().is_match(d):
-            alerta = AlertaFamiliar(
-                person_id=best["person_id"],
-                familiar_nombre=best["nombre"],
-                familiar_telefono=best["telefono"],
-                image_url=best["image_url"],
-                coincidencia=best["coincidencia"],
-                confianza=best["confianza"],
-                es_menor=best["es_menor"],
-            )
-            alerta = MenoresPrivacy(alerta)
-
-    return ResultadoRegistro(codigo=codigo, person_id=str(person_id), alerta=alerta)
+    use_case = RegistrarEncontrado(get_repo(), get_policy())
+    return _use_case_execute(
+        use_case.execute,
+        procesadas=procesadas,
+        es_menor=es_menor,
+        nombre=nombre,
+        apellido=apellido,
+        doc_tipo=doc_tipo,
+        doc_numero=doc_numero,
+        refugio=refugio,
+        ubicacion=ubicacion,
+        telefono_responsable=telefono_responsable,
+        doc_responsable=doc_responsable,
+        descripcion=descripcion,
+    )
 
 
 @app.post(
@@ -456,12 +407,10 @@ async def buscar_admin(
         embedding, _ = faces.embedding_from_bytes(data)
     except ValueError as e:
         raise HTTPException(422, str(e)) from None
-
-    limite = max(1, min(LIMITE_MAX, limite))
-    repo = get_repo()
-    results = repo.search_admin(embedding, estado, limite)
-    candidatos = [MenoresPrivacy(Candidato(**d)) for d in results]
-    return candidatos
+    use_case = BuscarAdmin(get_repo())
+    return _use_case_execute(
+        use_case.execute, embedding=embedding, estado=estado, limite=limite
+    )
 
 
 @app.get(
@@ -474,10 +423,10 @@ async def buscar_admin(
 )
 def listar(limite: int = 100, estado: str | None = None, moderacion: str | None = None):
     """Lista registros. Filtra por estado y/o moderación (para revisar/aprobar)."""
-    repo = get_repo()
-    results = repo.list_admin(limite, estado, moderacion)
-    personas = [MenoresPrivacy(PersonaAdmin(**d)) for d in results]
-    return personas
+    use_case = ListarPersonasAdmin(get_repo())
+    return _use_case_execute(
+        use_case.execute, limite=limite, estado=estado, moderacion=moderacion
+    )
 
 
 @app.patch(
@@ -489,14 +438,8 @@ def listar(limite: int = 100, estado: str | None = None, moderacion: str | None 
 )
 def moderar(person_id: str, valor: str):
     """`valor` = `aprobada` | `rechazada` | `pendiente`. Las rechazadas no aparecen en búsquedas."""
-    if valor not in ("aprobada", "rechazada", "pendiente"):
-        raise HTTPException(400, "valor debe ser 'aprobada', 'rechazada' o 'pendiente'")
-
-    repo = get_repo()
-    n = repo.set_moderacion(person_id, valor)
-    if not n:
-        raise HTTPException(404, "No existe esa persona")
-    return {"person_id": person_id, "moderacion": valor, "fotos_actualizadas": n}
+    use_case = ModerarPersona(get_repo())
+    return _use_case_execute(use_case.execute, person_id=person_id, valor=valor)
 
 
 @app.delete(
@@ -508,8 +451,5 @@ def moderar(person_id: str, valor: str):
 )
 def eliminar(person_id: str):
     """Borra la persona, sus fotos del almacenamiento y sus filas de la BD."""
-    repo = get_repo()
-    fotos = repo.delete(person_id)
-    if not fotos:
-        raise HTTPException(404, "No existe esa persona")
-    return {"person_id": person_id, "eliminada": True, "fotos": fotos}
+    use_case = EliminarPersona(get_repo())
+    return _use_case_execute(use_case.execute, person_id=person_id)

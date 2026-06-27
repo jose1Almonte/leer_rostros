@@ -9,6 +9,7 @@ from psycopg_pool import ConnectionPool
 
 from app import storage
 from app.domain.matching import MatchingPolicy
+from app.domain.persona import PersonaBase
 
 CONTENT_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
@@ -115,14 +116,14 @@ class PersonaRepository:
     def add(
         self,
         person_id: UUID,
-        datos: dict[str, Any],
+        persona: PersonaBase,
         procesadas: list[tuple[bytes, str, list[tuple[Any, float]]]],
     ) -> list[str]:
         """Insert one row per photo into personas + N embeddings per photo into persona_embeddings.
 
         Args:
             person_id: UUID grouping all photos.
-            datos: dict with estado, menor, nombre, apellido, etc.
+            persona: PersonaBase domain object with all fields.
             procesadas: list of (image_data, content_type, [(embedding, calidad), ...]).
 
         Returns:
@@ -135,10 +136,31 @@ class PersonaRepository:
                 foto_id = uuid.uuid4()
                 key = f"personas/{foto_id}.{ext}"
                 url = storage.upload_image(data, key, ct)
-                conn.execute(
-                    self._INSERT_PERSONA,
-                    {**datos, "id": foto_id, "pid": person_id, "url": url, "key": key},
-                )
+
+                # Map PersonaBase fields to SQL parameter names
+                datos = {
+                    "estado": persona.estado.value,
+                    "menor": persona.es_menor,
+                    "nombre": persona.nombre,
+                    "apellido": persona.apellido,
+                    "edad": persona.edad,
+                    "doc_tipo": persona.doc_tipo,
+                    "doc_numero": persona.doc_numero,
+                    "tel_contacto": persona.telefono_contacto,
+                    "refugio": persona.refugio,
+                    "tel_resp": persona.telefono_responsable,
+                    "doc_resp": persona.doc_responsable,
+                    "descripcion": persona.descripcion,
+                    "ubicacion": persona.ubicacion,
+                    "codigo": persona.codigo,
+                    # SQL-specific fields
+                    "id": foto_id,
+                    "pid": person_id,
+                    "url": url,
+                    "key": key,
+                }
+
+                conn.execute(self._INSERT_PERSONA, datos)
                 for emb, calidad in embs:
                     conn.execute(self._INSERT_EMBEDDING, (foto_id, emb, calidad))
                 conn.commit()
