@@ -8,10 +8,12 @@
 - GET  /admin/personas           lista todos los registros.
 """
 
+import uuid
 from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any
 
+import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 
 from app import faces
@@ -26,12 +28,19 @@ from app.auth import (
 from app.config import get_settings
 from app.database import close_pool, get_pool, init_db
 from app.domain import MatchingPolicy
+from app.domain.persona import Estado, PersonaBase
 from app.repositories import PersonaRepository
 from app.schemas import (
     Candidato,
     LoginBody,
     LoginResp,
+    ImportarEncontradoIn,
+    ImportarResultado,
     PersonaAdmin,
+    ReporteAdmin,
+    ReporteCreado,
+    ReporteFallaIn,
+    ReportePublicacionIn,
     ResultadoBusqueda,
     ResultadoRegistro,
 )
@@ -164,9 +173,19 @@ async def lifespan(app: FastAPI):
 tags = [
     {"name": "familiar", "description": "Flujo del familiar que busca a alguien."},
     {"name": "rescatista", "description": "Flujo de quien encontró a una persona."},
-    {"name": "admin", "description": "Superadmin: buscar y comparar imágenes."},
+    {
+        "name": "importación",
+        "description": "Carga masiva de personas encontradas (admin).",
+    },
+    {
+        "name": "reportes",
+        "description": "Reportar fallas de la página o publicaciones inadecuadas.",
+    },
+    {"name": "admin", "description": "Superadmin: buscar, moderar y ver reportes."},
     {"name": "sistema", "description": "Estado del servicio."},
 ]
+
+ESTADOS_REPORTE = ("pendiente", "revisado", "resuelto", "descartado")
 
 # Respuestas de error que Swagger debe mostrar para los endpoints protegidos por
 # `get_current_admin`. Sin esto, /api/docs no exhibe los 401/403 que el dev debe
@@ -224,6 +243,10 @@ una **alerta** con el nombre y teléfono del familiar.
 > **Protocolo de menor:** si `es_menor=true`, el `nombre`/`apellido` se guardan en la BD
 > pero se ocultan en las respuestas de la API (protección de menores).
 
+### 🚩 REPORTES (público)
+- `POST /reportes/falla` — reportar un bug/falla de la página (JSON: `descripcion`, `url?`, `contacto?`).
+- `POST /reportes/publicacion` — reportar una publicación/foto inadecuada (JSON: `person_id`, `descripcion`, `contacto?`).
+
 ### 🛡️ SUPERADMIN
 
 Todos los endpoints de abajo requieren el header **`Authorization: Bearer <token>`**.
@@ -239,6 +262,8 @@ El token se obtiene de `POST /admin/login` (abajo).
 - `GET /admin/personas` — listar registros. Query: `limite`, `estado`, `moderacion`.
 - `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
 - `DELETE /admin/personas/{person_id}` — borrar.
+- `GET /admin/reportes` — ver reportes recibidos (filtros `tipo`, `estado`).
+- `PATCH /admin/reportes/{id}/estado` — marcar un reporte (pendiente/revisado/resuelto/descartado).
 
 **Errores comunes en endpoints de admin:**
 
@@ -246,7 +271,6 @@ El token se obtiene de `POST /admin/login` (abajo).
 |---|---|
 | `401` | Sin header `Authorization`, token mal firmado, token expirado, o el admin ya no existe |
 | `403` | El admin existe pero está `is_active=false` (desactivado) |
-
 El body de error siempre es `{"detail": "..."}`. **No hay endpoint de logout**: el
 token vive en el front y expira solo; al recibir 401, el front debe volver a llamar
 a `POST /admin/login`.
@@ -453,3 +477,229 @@ def eliminar(person_id: str):
     """Borra la persona, sus fotos del almacenamiento y sus filas de la BD."""
     use_case = EliminarPersona(get_repo())
     return _use_case_execute(use_case.execute, person_id=person_id)
+
+
+# ----------------------------- REPORTES -----------------------------
+
+
+@app.post(
+    "/reportes/falla",
+    response_model=ReporteCreado,
+    status_code=201,
+    tags=["reportes"],
+    summary="Reportar una falla de la página",
+)
+async def reportar_falla(datos: ReporteFallaIn):
+    """Cualquier usuario puede reportar un problema/bug de la web. Queda en estado
+    `pendiente` para que el superadmin lo revise en `GET /admin/reportes`."""
+    with get_pool().connection() as conn:
+        row = conn.execute(
+            "INSERT INTO reportes (tipo, descripcion, url, contacto) "
+            "VALUES ('falla', %s, %s, %s) RETURNING id, tipo, estado, created_at",
+            (datos.descripcion.strip(), datos.url, datos.contacto),
+        ).fetchone()
+        conn.commit()
+    return ReporteCreado(id=str(row[0]), tipo=row[1], estado=row[2], created_at=row[3])
+
+
+@app.post(
+    "/reportes/publicacion",
+    response_model=ReporteCreado,
+    status_code=201,
+    tags=["reportes"],
+    summary="Reportar una publicación o foto inadecuada",
+)
+async def reportar_publicacion(datos: ReportePublicacionIn):
+    """Reporta una publicación inadecuada por su `person_id`. La publicación NO se
+    oculta automáticamente: queda registrada para que el superadmin la revise y
+    decida (puede rechazarla o eliminarla con los endpoints de moderación)."""
+    try:
+        pid = uuid.UUID(datos.person_id)
+    except ValueError:
+        raise HTTPException(422, "person_id inválido.")
+    with get_pool().connection() as conn:
+        existe = conn.execute(
+            "SELECT 1 FROM personas WHERE person_id = %s LIMIT 1", (pid,)
+        ).fetchone()
+        if not existe:
+            raise HTTPException(404, "No existe la publicación que intentas reportar.")
+        row = conn.execute(
+            "INSERT INTO reportes (tipo, descripcion, person_id, contacto) "
+            "VALUES ('publicacion', %s, %s, %s) RETURNING id, tipo, estado, created_at",
+            (datos.descripcion.strip(), pid, datos.contacto),
+        ).fetchone()
+        conn.commit()
+    return ReporteCreado(id=str(row[0]), tipo=row[1], estado=row[2], created_at=row[3])
+
+
+@app.get(
+    "/admin/reportes",
+    response_model=list[ReporteAdmin],
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: ver reportes (fallas y publicaciones)",
+)
+def listar_reportes(
+    tipo: str | None = None,
+    estado: str | None = None,
+    limite: int = 100,
+):
+    """Lista los reportes recibidos, del más reciente al más antiguo. Filtra por
+    `tipo` ('falla' | 'publicacion') y/o `estado`. Los de publicación traen el
+    contexto de la publicación reportada (nombre, foto, estado de moderación)."""
+    conds, args = [], []
+    if tipo in ("falla", "publicacion"):
+        conds.append("r.tipo = %s")
+        args.append(tipo)
+    if estado in ESTADOS_REPORTE:
+        conds.append("r.estado = %s")
+        args.append(estado)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    args.append(limite)
+    with get_pool().connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT r.id, r.tipo, r.descripcion, r.estado, r.person_id, r.url, r.contacto,
+                   r.created_at, p.nombre, p.estado, p.image_url, p.moderacion
+            FROM reportes r
+            LEFT JOIN LATERAL (
+                SELECT nombre, estado, image_url, moderacion FROM personas
+                WHERE person_id = r.person_id ORDER BY created_at LIMIT 1
+            ) p ON true
+            {where}
+            ORDER BY r.created_at DESC LIMIT %s
+            """,
+            tuple(args),
+        ).fetchall()
+    return [
+        ReporteAdmin(
+            id=str(r[0]),
+            tipo=r[1],
+            descripcion=r[2],
+            estado=r[3],
+            person_id=str(r[4]) if r[4] else None,
+            url=r[5],
+            contacto=r[6],
+            created_at=r[7],
+            pub_nombre=r[8],
+            pub_estado=r[9],
+            pub_image_url=r[10],
+            pub_moderacion=r[11],
+        )
+        for r in rows
+    ]
+
+
+@app.patch(
+    "/admin/reportes/{reporte_id}/estado",
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: cambiar el estado de un reporte",
+)
+def cambiar_estado_reporte(reporte_id: str, valor: str):
+    """`valor` = `pendiente` | `revisado` | `resuelto` | `descartado`."""
+    if valor not in ESTADOS_REPORTE:
+        raise HTTPException(400, f"valor debe ser uno de {ESTADOS_REPORTE}")
+    try:
+        rid = uuid.UUID(reporte_id)
+    except ValueError:
+        raise HTTPException(422, "reporte_id inválido.")
+    with get_pool().connection() as conn:
+        n = conn.execute(
+            "UPDATE reportes SET estado = %s WHERE id = %s", (valor, rid)
+        ).rowcount
+        conn.commit()
+    if not n:
+        raise HTTPException(404, "No existe ese reporte")
+    return {"id": reporte_id, "estado": valor}
+
+
+# ----------------------------- IMPORTACIÓN MASIVA -----------------------------
+
+
+def _descargar_imagen(url: str) -> bytes:
+    """Descarga una imagen desde una URL pública (para la carga masiva)."""
+    r = requests.get(url, timeout=25, headers={"User-Agent": "reencuentros-importer"})
+    r.raise_for_status()
+    if not r.content:
+        raise ValueError("La URL no devolvió contenido.")
+    return r.content
+
+
+@app.post(
+    "/encontrados/importar",
+    response_model=ImportarResultado,
+    status_code=201,
+    tags=["importación"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Importar UNA persona encontrada (descarga la foto por URL)",
+)
+async def importar_encontrado(datos: ImportarEncontradoIn):
+    """Registra una persona **encontrada** a partir de un registro de importación:
+    descarga la `foto_url`, extrae el/los embeddings y la guarda. Pensado para que un
+    script suba grandes volúmenes (ver `cargar_encontrados.py`).
+
+    **Idempotente:** si se envía `id_externo` y ya fue importado, devuelve
+    `estado='omitido'` sin duplicar. Validaciones laxas (no exige refugio)."""
+    cod = (datos.id_externo or "").strip() or ("REE-" + uuid.uuid4().hex[:8].upper())
+
+    # Idempotencia: si ya importamos este id_externo, no duplicar.
+    if datos.id_externo:
+        with get_pool().connection() as conn:
+            ya = conn.execute(
+                "SELECT person_id FROM personas WHERE codigo = %s LIMIT 1", (cod,)
+            ).fetchone()
+        if ya:
+            return ImportarResultado(
+                estado="omitido",
+                person_id=str(ya[0]),
+                codigo=cod,
+                motivo="ya importado",
+            )
+
+    # Descargar la foto.
+    try:
+        img = _descargar_imagen(datos.foto_url)
+    except Exception as e:
+        raise HTTPException(422, f"No se pudo descargar la foto: {e}") from None
+
+    # Extraer rostro(s). Si no hay rostro, se rechaza (no entra basura a la base).
+    try:
+        embs = faces.embeddings_from_bytes(img)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+
+    # Construir el objeto de dominio PersonaBase (Sergionx way).
+    nombre = (datos.nombre or "").strip() or None
+    apellido = (datos.apellido or "").strip() or None
+    ubic = (datos.ultima_ubicacion or "").strip() or None
+    desc_partes = []
+    if datos.reportante_name and datos.reportante_name.strip():
+        desc_partes.append(f"Reporta: {datos.reportante_name.strip()}")
+    if datos.fuente and datos.fuente.strip():
+        desc_partes.append(f"Fuente: {datos.fuente.strip()}")
+    descripcion = " · ".join(desc_partes) or None
+
+    person_id = uuid.uuid4()
+    persona = PersonaBase(
+        person_id=person_id,
+        estado=Estado.ENCONTRADA,
+        es_menor=False,  # data pública: no se oculta el nombre
+        nombre=nombre,
+        apellido=apellido,
+        edad=(datos.edad or None),
+        doc_tipo=None,
+        doc_numero=((datos.cedula or "").strip() or None),
+        telefono_contacto=None,
+        telefono_responsable=((datos.reportante_phone or "").strip() or None),
+        refugio=ubic,
+        ubicacion=ubic,
+        descripcion=descripcion,
+        codigo=cod,
+    )
+    with get_pool().connection() as conn:
+        get_repo().add(persona, [(img, "image/jpeg", embs)])
+    return ImportarResultado(estado="creado", person_id=str(person_id), codigo=cod)

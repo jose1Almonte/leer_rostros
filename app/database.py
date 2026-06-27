@@ -120,6 +120,27 @@ def init_db() -> None:
             "ON persona_embeddings USING hnsw (embedding vector_cosine_ops)"
         )
 
+        # --- Reportes de usuarios: fallas de la página y publicaciones/fotos inadecuadas. ---
+        # tipo='falla'       -> bug/problema de la web (descripcion + url opcional).
+        # tipo='publicacion' -> contenido inadecuado de una publicación (person_id).
+        # `person_id` no es FK porque en `personas` se repite (una fila por foto).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reportes (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                tipo        TEXT NOT NULL,
+                descripcion TEXT NOT NULL,
+                person_id   UUID,
+                url         TEXT,
+                contacto    TEXT,
+                estado      TEXT NOT NULL DEFAULT 'pendiente',
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS reportes_tipo_idx ON reportes (tipo)")
+        conn.execute("CREATE INDEX IF NOT EXISTS reportes_estado_idx ON reportes (estado)")
+
         # --- Tabla de admins (superadmin) ---
         # El password NUNCA se guarda en plano: vive como hash bcrypt. El seed inicial
         # (desde env vars) lo crea la primera vez que init_db() corre con la tabla
