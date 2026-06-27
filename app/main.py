@@ -20,6 +20,19 @@ from app.schemas import Coincidencia, PersonaOut, ResultadoBusqueda
 
 CONTENT_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
+# Bandas de confianza calibradas con la evaluación (misma persona <=0.446,
+# distintas >=0.683). Menor distancia = más parecido.
+CONF_ALTA = 0.45
+CONF_MEDIA = 0.60
+
+
+def nivel_confianza(distancia: float) -> str:
+    if distancia < CONF_ALTA:
+        return "alta"
+    if distancia < CONF_MEDIA:
+        return "media"
+    return "baja"
+
 DESCRIPTION = """
 API de **reconocimiento facial** para reunir personas desaparecidas con sus familias.
 
@@ -157,6 +170,7 @@ async def buscar(
             id=str(r[0]), nombre=r[1], ci=r[2], rol=r[3], estado=r[4],
             image_url=r[5], created_at=r[6], distancia=float(r[7]),
             es_match=float(r[7]) < s.match_threshold,
+            confianza=nivel_confianza(float(r[7])),
         )
         for r in rows
     ]

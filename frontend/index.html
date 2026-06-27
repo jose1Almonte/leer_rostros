@@ -46,6 +46,7 @@
   .match img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; }
   .badge { padding: 2px 9px; border-radius: 999px; font-size: .72rem; font-weight: 700; }
   .badge.ok { background: rgba(46,204,113,.18); color: var(--ok); }
+  .badge.media { background: rgba(241,196,15,.18); color: #f1c40f; }
   .badge.no { background: rgba(255,90,90,.15); color: var(--bad); }
   .dist { color: var(--muted); font-size: .78rem; }
   .empty { color: var(--muted); font-style: italic; }
@@ -129,15 +130,20 @@ document.getElementById("btnBus").addEventListener("click", async () => {
     if (!r.ok) throw new Error(data.detail || "Error");
     if (!data.coincidencias.length) { res.innerHTML = '<span class="empty">No hay personas registradas todavía.</span>'; return; }
     res.innerHTML = `<p class="dist">Umbral de match: distancia &lt; ${data.umbral}</p>` +
-      data.coincidencias.map(c => `
+      data.coincidencias.map(c => {
+        const cls = c.confianza === 'alta' ? 'ok' : c.confianza === 'media' ? 'media' : 'no';
+        const txt = c.confianza === 'alta' ? '✓ COINCIDE (alta)'
+                  : c.confianza === 'media' ? '⚠ POSIBLE (revisar)'
+                  : '✗ no coincide';
+        return `
         <div class="match">
           <img src="${c.image_url}" onerror="this.style.opacity=.3" />
           <div style="flex:1">
-            <span class="badge ${c.es_match ? 'ok' : 'no'}">${c.es_match ? '✓ COINCIDE' : '✗ no coincide'}</span>
+            <span class="badge ${cls}">${txt}</span>
             <div>${c.nombre || '<i>sin nombre</i>'} ${c.ci ? '· ' + c.ci : ''}</div>
-            <div class="dist">distancia: ${c.distancia.toFixed(4)} · estado: ${c.estado}</div>
+            <div class="dist">distancia: ${c.distancia.toFixed(4)} · confianza: ${c.confianza} · ${c.estado}</div>
           </div>
-        </div>`).join("");
+        </div>`; }).join("");
   } catch (e) { res.innerHTML = '<span class="badge no">Error</span> ' + e.message; }
   finally { btn.disabled = false; }
 });

@@ -19,7 +19,8 @@ class Coincidencia(PersonaOut):
     """Persona candidata devuelta por una búsqueda, con su grado de similitud."""
 
     distancia: float = Field(..., description="Distancia coseno entre el rostro buscado y este registro. Menor = más parecido (0 = idéntico).", examples=[0.256])
-    es_match: bool = Field(..., description="True si la distancia está por debajo del umbral de coincidencia (alta confianza).", examples=[True])
+    es_match: bool = Field(..., description="True si la distancia está por debajo del umbral de coincidencia.", examples=[True])
+    confianza: str = Field(..., description="Nivel de confianza: 'alta' (casi seguro la misma persona), 'media' (posible, revisar) o 'baja' (probablemente distinta).", examples=["alta"])
 
 
 class ResultadoBusqueda(BaseModel):
