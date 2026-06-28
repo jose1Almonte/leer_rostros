@@ -1,0 +1,232 @@
+{
+  "name": "Reencuentros — Notificaciones WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reencuentros-match-notify",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9c900f23-6514-4790-9495-e2378ecbcec3",
+      "name": "1. Webhook match",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1000,
+        360
+      ],
+      "webhookId": "reencuentros-match-notify"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== CONFIG — EDITA ESTOS VALORES =====\nconst EVOLUTION_API_URL  = 'https://TU-EVOLUTION';      // sin / final\nconst EVOLUTION_API_KEY   = 'TU_EVOLUTION_APIKEY';\nconst EVOLUTION_INSTANCE = 'TU_INSTANCIA';\nconst NEGOCIO            = 'Reencuentros';\nconst MIN_FALLBACK       = 80;   // se usa solo si el payload no trae min_coincidencia\n// ========================================\nconst b = $json.body || $json;\nfunction norm(raw) {\n  if (!raw) return '';\n  raw = String(raw).trim();\n  const plus = raw.startsWith('+');\n  let d = raw.replace(/\\D/g, '');\n  if (!d) return '';\n  if (plus) { /* ya internacional */ }\n  else if (d.startsWith('00')) d = d.slice(2);\n  else if (d.startsWith('0')) d = '58' + d.replace(/^0+/, '');\n  else if (!(d.startsWith('58') && d.length >= 10)) d = '58' + d;\n  return d.length >= 8 ? d : '';\n}\n// Umbral single-source: viene del cron (addon_min_coincidencia_aviso) con fallback.\nconst MIN_COINCIDENCIA = Number(b.min_coincidencia) || MIN_FALLBACK;\n// Teléfono single-source: el cron ya lo normalizó en `telefono`. Solo si no viene,\n// se normaliza aquí como respaldo (evita prefijo '58' divergente).\nconst phone = String(b.telefono || '').replace(/\\D/g, '') || norm(b.familiar_telefono);\nconst coincidencia = Number(b.coincidencia || 0);\nconst quien = b.nombre_buscada || 'la persona que registraste como desaparecida';\nlet msg = '🟢 *' + NEGOCIO + '*\\n\\n' +\n  'Tal vez encontramos a ' + quien + ' (coincidencia ' + coincidencia + '%).\\n\\n' +\n  'Por favor revisa si es tu familiar:';\nif (b.refugio) msg += '\\n📍 Refugio: ' + b.refugio;\nif (b.ubicacion && b.ubicacion !== b.refugio) msg += '\\n📌 Ubicación: ' + b.ubicacion;\nif (b.encontrado_por) msg += '\\n🙋 Encontrada por: ' + b.encontrado_por;\nif (b.telefono_responsable) msg += '\\n📞 Contacto: ' + b.telefono_responsable;\nmsg += '\\n\\nEs un aviso automático y puede haber error — confirma la identidad antes de actuar. 🙏';\nreturn [{ json: {\n  evolution_api_url: EVOLUTION_API_URL, evolution_api_key: EVOLUTION_API_KEY,\n  instance_name: b.instance_name || EVOLUTION_INSTANCE,\n  phone, message: msg, coincidencia, min_coincidencia: MIN_COINCIDENCIA,\n  has_phone: phone !== ''\n}}];"
+      },
+      "id": "19942b6f-7a0f-4b24-8cf3-6083966c6de4",
+      "name": "2. Construir mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -780,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f0f837f3-4164-4e21-b1dc-5bf32bcd2e1b",
+              "leftValue": "={{ $json.coincidencia }}",
+              "rightValue": "={{ $json.min_coincidencia }}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "id": "830c0085-cddb-4afb-b639-30340239984c",
+              "leftValue": "={{ $json.has_phone }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2bf53ce5-81ce-488b-8b04-b62876f94c47",
+      "name": "3. ¿Supera umbral?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -560,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.evolution_api_url }}/message/sendText/{{ $json.instance_name }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.evolution_api_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.phone, text: $json.message }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "e2a448dd-6d3d-46c9-95bf-ca36f864aa13",
+      "name": "4. Enviar a familia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -340,
+        300
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'sent', to: $('2. Construir mensaje').first().json.phone, coincidencia: $('2. Construir mensaje').first().json.coincidencia }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "890d470e-ee4a-4e2b-aeb8-397650be99d0",
+      "name": "5. Responder OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -120,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'failed', error: (($json.error && ($json.error.message || $json.error)) || 'evolution_send_error') }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "71561507-7609-4c06-a558-18d99e63cb67",
+      "name": "Responder fallida",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -120,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'skipped', reason: 'below_threshold_or_no_phone' }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "f048db4d-2785-4eea-bc50-38ed3ce1da0c",
+      "name": "Responder skip",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -340,
+        520
+      ]
+    }
+  ],
+  "connections": {
+    "1. Webhook match": {
+      "main": [
+        [
+          {
+            "node": "2. Construir mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Construir mensaje": {
+      "main": [
+        [
+          {
+            "node": "3. ¿Supera umbral?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. ¿Supera umbral?": {
+      "main": [
+        [
+          {
+            "node": "4. Enviar a familia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Enviar a familia": {
+      "main": [
+        [
+          {
+            "node": "5. Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder fallida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "f9c9c9497375b3eb6ccd4829653c328b9c004211ef299fecd7623a111c4dd4b9"
+  },
+  "tags": []
+}
