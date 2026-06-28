@@ -25,6 +25,8 @@ fd.append("files", file);                 // File del <input type=file>
 fd.append("nombre", "María");
 fd.append("doc_numero", "12345678");
 fd.append("telefono_contacto", "0412-1234567");
+fd.append("limit", "10");                // resultados por pagina
+fd.append("offset", "0");                // primera pagina
 const r = await fetch("/api/buscados", { method: "POST", body: fd });
 const data = await r.json();
 ```
@@ -46,6 +48,28 @@ const data = await r.json();
     }
   ]
 }
+```
+
+La respuesta tambien incluye `data` (mismos items que `coincidencias`) y `meta`
+para clientes nuevos:
+
+```json
+{
+  "data": ["... array de resultados ..."],
+  "meta": {
+    "total_records": 150,
+    "current_page": 1,
+    "total_pages": 15,
+    "limit": 10,
+    "offset": 0
+  }
+}
+```
+
+Para cargar mas resultados sin registrar otra busqueda:
+
+```http
+GET /api/buscados/REE-CC66DA69/coincidencias?limit=10&offset=10
 ```
 
 > Muestra `coincidencia`% y `confianza`. Al pulsar **"Es mi familiar"** revela

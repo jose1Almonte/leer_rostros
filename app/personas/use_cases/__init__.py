@@ -3,6 +3,7 @@
 from app.personas.use_cases.agregar_historial import AgregarHistorial
 from app.personas.use_cases.buscar_admin import BuscarAdmin
 from app.personas.use_cases.eliminar_persona import EliminarPersona
+from app.personas.use_cases.listar_coincidencias_busqueda import ListarCoincidenciasBusqueda
 from app.personas.use_cases.listar_personas_admin import ListarPersonasAdmin
 from app.personas.use_cases.listar_publico import ListarPublico
 from app.personas.use_cases.moderar_persona import ModerarPersona
@@ -15,6 +16,7 @@ __all__ = [
     "AgregarHistorial",
     "BuscarAdmin",
     "EliminarPersona",
+    "ListarCoincidenciasBusqueda",
     "ListarPersonasAdmin",
     "ListarPublico",
     "ModerarPersona",

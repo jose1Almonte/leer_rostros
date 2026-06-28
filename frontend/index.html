@@ -39,6 +39,8 @@
   .reveal{margin-top:6px;padding:8px;border-radius:8px;background:#10331f;border:1px solid #1d5c39;font-size:.85rem;display:none}
   .alerta{padding:12px;border-radius:10px;background:rgba(241,196,15,.12);border:1px solid var(--warn);margin-top:10px}
   .esmifam{background:var(--ok);color:#062a14;border:0;padding:6px 10px;border-radius:7px;font-weight:700;cursor:pointer;font-size:.78rem;margin-top:6px}
+  .loadmore{width:100%;background:#0d1120;color:var(--txt);border:1px solid var(--accent);padding:10px;border-radius:8px;font-weight:700;cursor:pointer;margin-top:8px}
+  .loadmore:disabled{opacity:.6;cursor:progress}
 </style>
 </head>
 <body>
@@ -139,6 +141,7 @@
 const API="/api";
 const $=id=>document.getElementById(id);
 let ADMIN_TOKEN="";
+let F_SEARCH={codigo:null,limit:10,offset:0,totalRecords:0,items:[],hasMore:false,isLoading:false,error:null};
 function H(){return ADMIN_TOKEN?{Authorization:"Bearer "+ADMIN_TOKEN}:{}}
 const HTML_ESCAPE={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"};
 function esc(v){return String(v??"").replace(/[&<>"']/g,ch=>HTML_ESCAPE[ch])}
@@ -186,20 +189,56 @@ function candHTML(c,i){
     </div></div>`;
 }
 
+function resetFSearch(){
+  F_SEARCH={codigo:null,limit:10,offset:0,totalRecords:0,items:[],hasMore:false,isLoading:false,error:null};
+}
+function pageItems(d){return Array.isArray(d.data)?d.data:(Array.isArray(d.coincidencias)?d.coincidencias:[])}
+function applyFPage(d,replace=true){
+  const items=pageItems(d);
+  const meta=d.meta||{};
+  if(replace){
+    F_SEARCH.items=items;
+    F_SEARCH.codigo=d.codigo||null;
+    F_SEARCH.limit=num(meta.limit,num($("f_limite").value,10));
+  }else F_SEARCH.items=F_SEARCH.items.concat(items);
+  F_SEARCH.totalRecords=num(meta.total_records,F_SEARCH.items.length);
+  F_SEARCH.offset=F_SEARCH.items.length;
+  F_SEARCH.hasMore=F_SEARCH.offset<F_SEARCH.totalRecords;
+  F_SEARCH.error=null;
+}
+function renderFResults(){
+  const res=$("f_res"),shown=F_SEARCH.items.length,total=F_SEARCH.totalRecords;
+  let h=`<p class="dim">B&uacute;squeda registrada (c&oacute;digo <b>${field(F_SEARCH.codigo,"")}</b>) &middot; Mostrando ${shown} de ${total} coincidencias:</p>`;
+  h+=shown?F_SEARCH.items.map(candHTML).join(""):'<span>A&uacute;n no hay encontrados que coincidan.</span>';
+  if(F_SEARCH.error)h+=`<p><span class="badge no">Error</span> ${esc(F_SEARCH.error)}</p>`;
+  if(F_SEARCH.hasMore)h+=`<button class="loadmore" id="f_more" ${F_SEARCH.isLoading?"disabled":""}>${F_SEARCH.isLoading?"Cargando...":"Cargar m&aacute;s coincidencias"}</button>`;
+  res.innerHTML=h;
+  const more=$("f_more");if(more)more.addEventListener("click",loadMoreF);
+}
+async function loadMoreF(){
+  if(F_SEARCH.isLoading||!F_SEARCH.hasMore||!F_SEARCH.codigo)return;
+  F_SEARCH.isLoading=true;renderFResults();
+  try{const qs=new URLSearchParams({limit:String(F_SEARCH.limit),offset:String(F_SEARCH.offset)});
+    const r=await fetch(API+"/buscados/"+encodeURIComponent(F_SEARCH.codigo)+"/coincidencias?"+qs.toString());
+    const d=await r.json();if(!r.ok)throw new Error(d.detail||"Error");
+    applyFPage(d,false);
+  }catch(e){F_SEARCH.error=e.message||"Error"}
+  finally{F_SEARCH.isLoading=false;renderFResults();}
+}
+
 $("f_btn").addEventListener("click",async()=>{
   const files=$("f_file").files,res=$("f_res");
   if(!files.length){res.innerHTML='Sube una foto.';return}
   const b=$("f_btn");b.disabled=true;res.textContent="Buscando coincidencias...";
+  resetFSearch();
   const fd=new FormData();for(const f of files)fd.append("files",f);
   fd.append("nombre",$("f_nombre").value);fd.append("apellido",$("f_apellido").value);
   fd.append("edad",$("f_edad").value);fd.append("doc_tipo",$("f_doctipo").value);
   fd.append("doc_numero",$("f_docnum").value);fd.append("telefono_contacto",$("f_tel").value);
-  fd.append("limite",$("f_limite").value);
+  fd.append("limit",$("f_limite").value);fd.append("offset","0");
   try{const r=await fetch(API+"/buscados",{method:"POST",body:fd});const d=await r.json();
     if(!r.ok)throw new Error(d.detail||"Error");
-    const coincidencias=Array.isArray(d.coincidencias)?d.coincidencias:[];
-    res.innerHTML=`<p class="dim">B&uacute;squeda registrada (c&oacute;digo <b>${field(d.codigo,"")}</b>) &middot; ${num(d.total)} candidatos:</p>`+
-      (coincidencias.length?coincidencias.map(candHTML).join(""):'<span>A&uacute;n no hay encontrados que coincidan.</span>');
+    applyFPage(d,true);renderFResults();
   }catch(e){res.innerHTML='<span class="badge no">Error</span> '+esc(e.message||"Error")}finally{b.disabled=false}
 });
 

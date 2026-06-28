@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any
 
 import requests
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import faces
@@ -35,6 +35,7 @@ from app.personas.use_cases import (
     AgregarHistorial,
     BuscarAdmin,
     EliminarPersona,
+    ListarCoincidenciasBusqueda,
     ListarPersonasAdmin,
     ListarPublico,
     ModerarPersona,
@@ -244,12 +245,16 @@ Un familiar sube la foto de a quién busca. Se registra como *buscada* y se devu
 | `doc_tipo` | texto | no | `V` |
 | `doc_numero` | texto | no* | `12345678` |
 | `telefono_contacto` | texto | no | `0412-1234567` |
-| `limite` | entero | no (def. `10`) | `20` |
+| `limit` / `limite` | entero | no (def. `10`) | `20` |
+| `offset` | entero | no (def. `0`) | `20` |
+| `page` | entero | no | `2` |
 
 \\* Manda **al menos** `nombre` o `doc_numero` (validación).
-El front decide el tamaño de página con **`limite`** (1-50) y pagina con **`offset`** o
-**`page`**. La respuesta incluye **`meta`** (`total_records`, `current_page`, `total_pages`)
-además de `coincidencias` (que se mantiene por compatibilidad).
+El front decide cuántas coincidencias recibir con **`limit`** (1-50). **`limite`**
+se mantiene por compatibilidad. **`offset`** / **`page`** permiten cargar más
+coincidencias sin traer todo el listado en una sola respuesta. La respuesta incluye
+**`data`** y **`meta`** (`total_records`, `current_page`, `total_pages`) además de
+`coincidencias` (que se mantiene por compatibilidad).
 
 ### 🟢 Flujo RESCATISTA — `POST /encontrados`
 Quien encontró a alguien lo registra. Si un familiar ya lo buscaba, la respuesta trae
@@ -397,11 +402,17 @@ async def registrar_busqueda(
     limite: int = Form(
         10, description="Tamaño de página (1-50). Cuántas coincidencias por página."
     ),
-    offset: int = Form(0, description="Desplazamiento para paginar (alternativa a page)."),
-    page: int | None = Form(None, description="Página 1-based (tiene prioridad sobre offset)."),
+    limit: int | None = Form(
+        None, description="Alias de limite para clientes que usan limit."
+    ),
+    offset: int = Form(0, description="Cantidad de coincidencias a omitir."),
+    page: int | None = Form(
+        None, description="Pagina 1-based. Si se envia, tiene prioridad sobre offset."
+    ),
 ):
     procesadas = await _procesar_fotos(files)
     use_case = RegistrarBusqueda(get_repo(), get_policy())
+    limite_final = limit if limit is not None else limite
     return _use_case_execute(
         use_case.execute,
         procesadas=procesadas,
@@ -411,7 +422,38 @@ async def registrar_busqueda(
         doc_tipo=doc_tipo,
         doc_numero=doc_numero,
         telefono_contacto=telefono_contacto,
-        limite=limite,
+        limite=limite_final,
+        offset=offset,
+        page=page,
+    )
+
+
+@app.get(
+    "/buscados/{codigo}/coincidencias",
+    response_model=ResultadoBusqueda,
+    tags=["familiar"],
+    summary="Familiar: cargar mas coincidencias de una busqueda",
+)
+def listar_coincidencias_busqueda(
+    codigo: str,
+    limite: int | None = Query(None, description="Alias legacy de limit."),
+    limit: int | None = Query(
+        None, description="Cantidad de resultados por pagina (1-50)."
+    ),
+    offset: int = Query(0, description="Cantidad de resultados a omitir."),
+    page: int | None = Query(
+        None, description="Pagina 1-based. Si se envia, tiene prioridad sobre offset."
+    ),
+):
+    """Devuelve mas coincidencias de una busqueda existente sin registrarla de nuevo."""
+    use_case = ListarCoincidenciasBusqueda(get_repo())
+    limite_final = (
+        limit if limit is not None else (limite if limite is not None else 10)
+    )
+    return _use_case_execute(
+        use_case.execute,
+        codigo=codigo,
+        limite=limite_final,
         offset=offset,
         page=page,
     )

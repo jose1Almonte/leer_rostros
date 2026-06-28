@@ -68,6 +68,15 @@ class PersonaRepository:
         LIMIT %s OFFSET %s
     """
 
+    _GET_BUSQUEDA_EMBEDDING = """
+        SELECT pe.embedding
+        FROM personas p
+        JOIN persona_embeddings pe ON pe.foto_id = p.id
+        WHERE p.codigo = %s AND p.estado = 'buscada'
+        ORDER BY p.created_at ASC, pe.created_at ASC
+        LIMIT 1
+    """
+
     # Admin search: same ROW_NUMBER() but NO moderacion filter
     _SEARCH_ADMIN = """
         SELECT {cols}, b.distancia
@@ -450,6 +459,12 @@ class PersonaRepository:
         """Cantidad de eventos en el histórico de una persona."""
         with self._pool.connection() as conn:
             return int(conn.execute(self._COUNT_HISTORIAL, (person_id,)).fetchone()[0])
+
+    def get_busqueda_embedding(self, codigo: str) -> Any | None:
+        """Return the stored query embedding for a FAMILIAR search code."""
+        with self._pool.connection() as conn:
+            row = conn.execute(self._GET_BUSQUEDA_EMBEDDING, (codigo,)).fetchone()
+        return row[0] if row else None
 
     def list_publico(self, estado: str, limit: int, offset: int = 0) -> list[dict]:
         """Listado PÚBLICO paginado (sin datos sensibles). Solo moderacion='aprobada'."""

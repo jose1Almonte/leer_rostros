@@ -52,7 +52,11 @@ class ResultadoBusqueda(BaseModel):
     codigo: str = Field(..., description="Código del registro de búsqueda generado.")
     total: int = Field(..., description="Cantidad de coincidencias en ESTA página (len de coincidencias).")
     coincidencias: list[Candidato]
-    meta: PageMeta | None = Field(None, description="Paginación: total real, página actual y total de páginas.")
+    data: list[Candidato] = Field(
+        ...,
+        description="Resultados paginados para clientes nuevos; mismos items que coincidencias.",
+    )
+    meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
 
 
 class AlertaFamiliar(BaseModel):

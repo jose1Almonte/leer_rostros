@@ -102,6 +102,7 @@ class RegistrarBusqueda:
                     codigo=codigo,
                     total=1,
                     coincidencias=[candidato],
+                    data=[candidato],
                     meta=PageMeta(**construir_meta(1, limite, offset)),
                 )
 
@@ -116,5 +117,6 @@ class RegistrarBusqueda:
             codigo=codigo,
             total=len(candidatos),
             coincidencias=candidatos,
+            data=candidatos,
             meta=PageMeta(**construir_meta(total, limite, offset)),
         )

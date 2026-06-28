@@ -79,6 +79,9 @@ class TestRegistrarBusquedaHappyPath:
         assert result.codigo.startswith("REE-")
         assert result.total == 1
         assert len(result.coincidencias) == 1
+        assert result.data == result.coincidencias
+        assert result.meta.total_records == 1
+        assert result.meta.current_page == 1
 
     def test_happy_path_with_doc_numero(self, use_case, fake_repo):
         """doc_numero provided (no name), returns matches."""
@@ -124,6 +127,40 @@ class TestRegistrarBusquedaHappyPath:
 
         assert result.total == 0
         assert result.coincidencias == []
+        assert result.data == []
+        assert result.meta.total_records == 0
+        assert result.meta.total_pages == 0
+
+    def test_paginates_matches_with_offset(self, use_case, fake_repo):
+        """offset skips already loaded ranked candidates."""
+        for i in range(5):
+            found = PersonaBase(
+                person_id=uuid4(),
+                estado=Estado.ENCONTRADA,
+                es_menor=False,
+                nombre=f"Persona {i}",
+                moderacion="aprobada",
+                photos=[f"https://fake-cdn.example.com/personas/{i}.jpg"],
+            )
+            fake_repo._personas.append(found)
+
+        result = use_case.execute(
+            procesadas=_make_procesadas(),
+            nombre="Test",
+            apellido=None,
+            edad=None,
+            doc_tipo=None,
+            doc_numero=None,
+            telefono_contacto=None,
+            limite=2,
+            offset=2,
+        )
+
+        assert result.total == 2
+        assert [c.nombre for c in result.data] == ["Persona 2", "Persona 3"]
+        assert result.meta.total_records == 5
+        assert result.meta.current_page == 2
+        assert result.meta.total_pages == 3
 
     def test_codigo_is_generated(self, use_case):
         """Result has a codigo starting with 'REE-'."""
