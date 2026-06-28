@@ -104,6 +104,12 @@ class FakePersonaRepository:
     def persona_exists(self, person_id: str) -> bool:
         return any(str(p.person_id) == person_id for p in self._personas)
 
+    def persona_visible(self, person_id: str) -> bool:
+        return any(
+            str(p.person_id) == person_id and p.moderacion == "aprobada"
+            for p in self._personas
+        )
+
     def get_persona_basics(self, person_id: str) -> dict | None:
         for p in self._personas:
             if str(p.person_id) == person_id:

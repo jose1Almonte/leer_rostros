@@ -156,6 +156,35 @@ class TrazaPersona(BaseModel):
     eventos: list[EventoHistorial] = Field(..., description="Eventos en orden cronológico (más antiguo primero).")
 
 
+class EventoHistorialPublico(BaseModel):
+    """Un avistamiento del histórico en su forma PÚBLICA: SIN datos sensibles.
+
+    Igual que `EventoHistorial` pero **omite el teléfono del responsable**. Es lo que
+    ve cualquier persona (no admin) al consultar el rastro de un encontrado visible."""
+
+    id: str
+    person_id: str
+    refugio: str | None = Field(None, description="Refugio donde estaba en este evento.")
+    ubicacion: str | None = Field(None, description="Dónde se la vio/encontró en este evento.")
+    encontrado_por: str | None = Field(None, description="Quién la reportó en este evento.")
+    nota: str | None = Field(None, description="Nota libre (p. ej. 'registro inicial', 'traslado').")
+    created_at: datetime = Field(..., description="Timestamp del avistamiento.")
+
+
+class TrazaPersonaPublica(BaseModel):
+    """Histórico PÚBLICO (trazabilidad) de una persona encontrada, sin teléfono.
+
+    Pensado para que **cualquier persona** siga el rastro de un encontrado: dónde ha
+    estado y cuándo, en orden cronológico. Solo disponible para personas **visibles**
+    (moderación aprobada); el teléfono del responsable NO se incluye (solo el admin lo ve)."""
+
+    person_id: str
+    total_eventos: int = Field(..., description="Cantidad de avistamientos en el histórico.")
+    eventos: list[EventoHistorialPublico] = Field(
+        ..., description="Avistamientos en orden cronológico (el más antiguo primero)."
+    )
+
+
 class FichaPersona(BaseModel):
     """Dossier de una persona: quién la buscaba (inversa por cédula) + su histórico."""
 

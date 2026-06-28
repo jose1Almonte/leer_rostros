@@ -43,6 +43,7 @@ from app.personas.use_cases import (
     RegistrarEncontrado,
     VerFichaPersona,
     VerTrazabilidad,
+    VerTrazabilidadPublica,
 )
 from app.reportes.repositories.reporte import ReporteRepository
 from app.reportes.use_cases import (
@@ -71,6 +72,7 @@ from app.schemas import (
     HistorialEventoIn,
     FichaPersona,
     TrazaPersona,
+    TrazaPersonaPublica,
 )
 from app.shared._exceptions import (
     ModificacionInvalidaError,
@@ -523,11 +525,19 @@ async def registrar_encontrado(
     summary="Rescatista: agregar un avistamiento al histórico de una persona",
 )
 def agregar_historial(person_id: str, evento: HistorialEventoIn):
-    """Registra un nuevo **avistamiento** (trazabilidad) de una persona ya encontrada.
+    """**Trazabilidad — paso 2 (escribir):** registra un nuevo **avistamiento** de una
+    persona ya encontrada.
 
     Úsalo cuando un rescatista vuelve a ver/trasladar a la persona o corrige dónde
     está: se guarda el evento con su **timestamp** y se actualiza la ubicación
     actual de la ficha. Hace falta al menos `refugio` o `ubicacion`.
+
+    **Flujo del historial:**
+    1. Al registrar (`POST /encontrados`) se crea el primer evento ("registro inicial").
+    2. Cualquier rescatista agrega más avistamientos con **este** endpoint.
+    3. **Cualquier persona** consulta el rastro con `GET /encontrados/{person_id}/historial`
+       (público, sin teléfono). El admin ve el rastro completo (con teléfono) en
+       `GET /admin/personas/{person_id}/historial`.
 
     `404` si el `person_id` no existe; `422` si no se indica ningún lugar."""
     use_case = AgregarHistorial(get_repo())
@@ -540,6 +550,28 @@ def agregar_historial(person_id: str, evento: HistorialEventoIn):
         telefono_responsable=evento.telefono_responsable,
         nota=evento.nota,
     )
+
+
+@app.get(
+    "/encontrados/{person_id}/historial",
+    response_model=TrazaPersonaPublica,
+    tags=["rescatista"],
+    summary="Público: ver el historial (rastro) de una persona encontrada",
+)
+def ver_historial_publico(person_id: str):
+    """**Trazabilidad — paso 3 (leer, público):** **cualquier persona** puede ver el
+    **rastro** de una persona encontrada: cada avistamiento con su `ubicacion`,
+    `refugio`, quién la reportó (`encontrado_por`), la `nota` y el `timestamp`
+    (`created_at`), en **orden cronológico** (el más antiguo primero).
+
+    Pensado para que un familiar siga por dónde ha pasado la persona. **No incluye
+    datos sensibles**: el `telefono_responsable` se **omite** (eso solo lo ve el admin
+    en `GET /admin/personas/{person_id}/historial`).
+
+    Solo disponible para personas **visibles** (moderación aprobada). `404` si la
+    persona no existe o no es visible."""
+    use_case = VerTrazabilidadPublica(get_repo())
+    return _use_case_execute(use_case.execute, person_id=person_id)
 
 
 @app.get(
@@ -677,9 +709,12 @@ def eliminar(person_id: str):
     summary="Trazabilidad: histórico de avistamientos de una persona",
 )
 def ver_trazabilidad(person_id: str):
-    """Devuelve el **rastro** completo de una persona encontrada: cada avistamiento
-    con su `ubicacion`, quién la reportó y el `timestamp`, en orden cronológico.
-    Incluye datos sensibles (teléfono), por eso es solo de admin. `404` si no existe."""
+    """**Trazabilidad (vista admin):** el **rastro** completo de una persona encontrada,
+    cada avistamiento con su `ubicacion`, quién la reportó y el `timestamp`, en orden
+    cronológico. A diferencia de la versión pública
+    (`GET /encontrados/{person_id}/historial`), **incluye el teléfono** del responsable,
+    por eso es solo de admin y funciona aunque la persona no esté aprobada.
+    `404` si no existe."""
     use_case = VerTrazabilidad(get_repo())
     return _use_case_execute(use_case.execute, person_id=person_id)
 

@@ -11,6 +11,7 @@ from app.personas.use_cases.registrar_busqueda import RegistrarBusqueda
 from app.personas.use_cases.registrar_encontrado import RegistrarEncontrado
 from app.personas.use_cases.ver_ficha_persona import VerFichaPersona
 from app.personas.use_cases.ver_trazabilidad import VerTrazabilidad
+from app.personas.use_cases.ver_trazabilidad_publica import VerTrazabilidadPublica
 
 __all__ = [
     "AgregarHistorial",
@@ -24,4 +25,5 @@ __all__ = [
     "RegistrarEncontrado",
     "VerFichaPersona",
     "VerTrazabilidad",
+    "VerTrazabilidadPublica",
 ]

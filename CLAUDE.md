@@ -43,7 +43,8 @@ app/
       registrar_busqueda.py
       registrar_encontrado.py
       agregar_historial.py     #   trazabilidad: nuevo avistamiento de una persona
-      ver_trazabilidad.py      #   trazabilidad: histórico (admin)
+      ver_trazabilidad.py      #   trazabilidad: histórico (admin, con teléfono)
+      ver_trazabilidad_publica.py  # trazabilidad: histórico público (sin teléfono)
       ver_ficha_persona.py     #   búsqueda inversa por cédula + histórico (admin)
       buscar_admin.py
       listar_personas_admin.py
@@ -72,7 +73,10 @@ app/
 2. **RESCATISTA** (`POST /encontrados`): Registers a found person. If a familiar was already searching, generates `AlertaFamiliar` (by **face**).
    - **Reverse search by cédula:** if a familiar (`buscada`) was already searching for the same `doc_numero`, the response carries `coincidencias_familiares` (list of `AlertaFamiliar`, 100% by exact document) so the rescatista can reach them. Complements the face-based `alerta`.
    - **Dedup by cédula + trazabilidad:** if a `doc_numero` already exists among `encontrada` people, the response carries `alerta_duplicado` and **no duplicate is created**. Resend with `confirmar_duplicado=true` to append the new sighting to that person's history instead. Every new found person also gets a first `persona_historial` event ("registro inicial").
-3. **TRAZABILIDAD** (`POST /encontrados/{person_id}/historial`, public): a rescatista logs a new sighting (location/refugio/timestamp) for an existing person; it also updates the person's current location (COALESCE — never wipes a field with NULL). View the full trace via `GET /admin/personas/{person_id}/historial` (admin, includes phone). The combined **dossier** — who was searching for this person (reverse by cédula) **plus** the full history — is at `GET /admin/personas/{person_id}/coincidencias` (admin).
+3. **TRAZABILIDAD** — flow of 3 steps:
+   - **Write** (`POST /encontrados/{person_id}/historial`, public): a rescatista logs a new sighting (location/refugio/timestamp) for an existing person; it also updates the person's current location (COALESCE — never wipes a field with NULL).
+   - **Read public** (`GET /encontrados/{person_id}/historial`, public): **anyone** can see the trace (chronological sightings) of a **visible** (aprobada) person. **Omits the phone** (`TrazaPersonaPublica` / `EventoHistorialPublico`). 404 if not visible.
+   - **Read admin** (`GET /admin/personas/{person_id}/historial`, admin): full trace **with phone**, works regardless of moderation. The combined **dossier** — who was searching for this person (reverse by cédula) **plus** the full history — is at `GET /admin/personas/{person_id}/coincidencias` (admin).
 4. **PUBLIC REPORTES** (`POST /reportes/falla`, `POST /reportes/publicacion`): Anyone can report a bug or an inadequate publication.
 5. **ADMIN** (`POST /buscar`, `GET /admin/personas`, `PATCH .../moderacion`, `DELETE`, `GET /admin/personas/{id}/historial`, `GET /admin/reportes`, `PATCH /admin/reportes/{id}/estado`): Requires Bearer token.
 

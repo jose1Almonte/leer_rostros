@@ -185,6 +185,11 @@ class PersonaRepository:
     # ¿Existe esa persona? (cualquier fila/foto con ese person_id)
     _PERSONA_EXISTS = "SELECT 1 FROM personas WHERE person_id = %s LIMIT 1"
 
+    # ¿Es VISIBLE? (al menos una fila aprobada). Para vistas públicas.
+    _PERSONA_VISIBLE = (
+        "SELECT 1 FROM personas WHERE person_id = %s AND moderacion = 'aprobada' LIMIT 1"
+    )
+
     # Datos base de una persona por su person_id (una fila por persona).
     _PERSONA_BASICS = """
         SELECT person_id, max(doc_numero), max(estado), max(nombre), max(apellido)
@@ -379,6 +384,11 @@ class PersonaRepository:
         """True si existe alguna foto/fila con ese person_id."""
         with self._pool.connection() as conn:
             return conn.execute(self._PERSONA_EXISTS, (person_id,)).fetchone() is not None
+
+    def persona_visible(self, person_id: str) -> bool:
+        """True si la persona existe y está VISIBLE (moderacion='aprobada')."""
+        with self._pool.connection() as conn:
+            return conn.execute(self._PERSONA_VISIBLE, (person_id,)).fetchone() is not None
 
     def get_persona_basics(self, person_id: str) -> dict | None:
         """Datos base de una persona (doc/estado/nombre) o None si no existe."""
