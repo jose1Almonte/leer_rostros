@@ -1,14 +1,13 @@
-"""Tests for ListarPersonasAdmin use case."""
+"""Tests for ListarPersonasAdmin use case (paginado: data + meta)."""
 
 import sys
 import types
-from datetime import datetime
 from uuid import uuid4
 
 import pytest
 
 from app.domain.persona import Estado, PersonaBase
-from app.schemas import PersonaAdmin
+from app.schemas import PaginaPersonas, PersonaAdmin
 from app.personas.use_cases import ListarPersonasAdmin
 from tests.personas.repositories.fake import FakePersonaRepository
 
@@ -35,50 +34,53 @@ def use_case(fake_repo):
     return ListarPersonasAdmin(fake_repo)
 
 
-class TestListarPersonasAdminHappyPath:
-    def test_happy_path_returns_personas(self, use_case, fake_repo):
-        """Returns list of PersonaAdmin."""
-        # Pre-seed with personas
-        for i in range(3):
-            persona = PersonaBase(
+def _seed(fake_repo, n, estado=Estado.ENCONTRADA, moderacion="aprobada", menor=False):
+    for i in range(n):
+        fake_repo._personas.append(
+            PersonaBase(
                 person_id=uuid4(),
-                estado=Estado.ENCONTRADA,
-                es_menor=False,
-                nombre=f"Persona {i}",
+                estado=estado,
+                es_menor=menor,
+                nombre=f"P{i}",
                 apellido="Test",
-                moderacion="aprobada",
+                moderacion=moderacion,
                 codigo=f"REE-{i:08d}",
-                photos=[f"https://fake-cdn.example.com/personas/{i}.jpg"],
+                photos=[f"https://x/{i}.jpg"],
             )
-            fake_repo._personas.append(persona)
+        )
 
-        results = use_case.execute(limite=10, estado=None, moderacion=None)
 
-        assert len(results) == 3
-        assert all(isinstance(r, PersonaAdmin) for r in results)
+class TestListarPersonasAdminHappyPath:
+    def test_devuelve_pagina_con_data_y_meta(self, use_case, fake_repo):
+        _seed(fake_repo, 3)
+        res = use_case.execute(limite=10, estado=None, moderacion=None)
+        assert isinstance(res, PaginaPersonas)
+        assert len(res.data) == 3
+        assert all(isinstance(r, PersonaAdmin) for r in res.data)
+        assert res.meta.total_records == 3
+        assert res.meta.current_page == 1
+        assert res.meta.total_pages == 1
 
     def test_paginacion_offset(self, use_case, fake_repo):
-        """limite + offset pagina correctamente sin solaparse."""
-        for i in range(5):
-            fake_repo._personas.append(
-                PersonaBase(
-                    person_id=uuid4(),
-                    estado=Estado.ENCONTRADA,
-                    es_menor=False,
-                    nombre=f"P{i}",
-                    moderacion="aprobada",
-                    photos=[f"https://x/{i}.jpg"],
-                )
-            )
+        """limite + offset pagina sin solaparse; meta refleja total real y páginas."""
+        _seed(fake_repo, 5)
         pag1 = use_case.execute(limite=2, estado=None, moderacion=None, offset=0)
         pag2 = use_case.execute(limite=2, estado=None, moderacion=None, offset=2)
-        assert len(pag1) == 2 and len(pag2) == 2
-        ids1 = {r.person_id for r in pag1}
-        ids2 = {r.person_id for r in pag2}
-        assert ids1.isdisjoint(ids2)  # páginas no se solapan
+        assert len(pag1.data) == 2 and len(pag2.data) == 2
+        assert {r.person_id for r in pag1.data}.isdisjoint({r.person_id for r in pag2.data})
+        assert pag1.meta.total_records == 5
+        assert pag1.meta.total_pages == 3  # ceil(5/2)
+        assert pag2.meta.current_page == 2
+
+    def test_page_equivale_a_offset(self, use_case, fake_repo):
+        """page=2 con limite=2 == offset=2."""
+        _seed(fake_repo, 5)
+        por_page = use_case.execute(limite=2, estado=None, moderacion=None, page=2)
+        por_offset = use_case.execute(limite=2, estado=None, moderacion=None, offset=2)
+        assert [r.person_id for r in por_page.data] == [r.person_id for r in por_offset.data]
+        assert por_page.meta.current_page == 2
 
     def test_stats_cuenta_real(self, fake_repo):
-        """stats() devuelve conteos reales independientes de paginación."""
         for est in ("buscada", "encontrada", "encontrada"):
             fake_repo._personas.append(
                 PersonaBase(
@@ -96,61 +98,22 @@ class TestListarPersonasAdminHappyPath:
         assert s["menores"] == 1
 
     def test_filters_by_estado(self, use_case, fake_repo):
-        """estado filter works."""
-        buscada = PersonaBase(
-            person_id=uuid4(),
-            estado=Estado.BUSCADA,
-            es_menor=False,
-            nombre="B",
-            apellido="Test",
-            moderacion="aprobada",
-            photos=["https://fake-cdn.example.com/personas/b.jpg"],
-        )
-        encontrada = PersonaBase(
-            person_id=uuid4(),
-            estado=Estado.ENCONTRADA,
-            es_menor=False,
-            nombre="E",
-            apellido="Test",
-            moderacion="aprobada",
-            photos=["https://fake-cdn.example.com/personas/e.jpg"],
-        )
-        fake_repo._personas.extend([buscada, encontrada])
-
-        results = use_case.execute(limite=10, estado="buscada", moderacion=None)
-
-        assert len(results) == 1
-        assert results[0].estado == "buscada"
+        _seed(fake_repo, 1, estado=Estado.BUSCADA)
+        _seed(fake_repo, 1, estado=Estado.ENCONTRADA)
+        res = use_case.execute(limite=10, estado="buscada", moderacion=None)
+        assert len(res.data) == 1
+        assert res.data[0].estado == "buscada"
+        assert res.meta.total_records == 1
 
     def test_filters_by_moderacion(self, use_case, fake_repo):
-        """moderacion filter works."""
-        aprobada = PersonaBase(
-            person_id=uuid4(),
-            estado=Estado.ENCONTRADA,
-            es_menor=False,
-            nombre="A",
-            apellido="Test",
-            moderacion="aprobada",
-            photos=["https://fake-cdn.example.com/personas/a.jpg"],
-        )
-        pendiente = PersonaBase(
-            person_id=uuid4(),
-            estado=Estado.ENCONTRADA,
-            es_menor=False,
-            nombre="P",
-            apellido="Test",
-            moderacion="pendiente",
-            photos=["https://fake-cdn.example.com/personas/p.jpg"],
-        )
-        fake_repo._personas.extend([aprobada, pendiente])
-
-        results = use_case.execute(limite=10, estado=None, moderacion="aprobada")
-
-        assert len(results) == 1
-        assert results[0].moderacion == "aprobada"
+        _seed(fake_repo, 1, moderacion="aprobada")
+        _seed(fake_repo, 1, moderacion="pendiente")
+        res = use_case.execute(limite=10, estado=None, moderacion="aprobada")
+        assert len(res.data) == 1
+        assert res.data[0].moderacion == "aprobada"
 
     def test_applies_menores_privacy(self, use_case, fake_repo):
-        """Minor personas masked."""
+        """Menores: nombre se conserva (ya no se enmascara en admin)."""
         minor = PersonaBase(
             person_id=uuid4(),
             estado=Estado.ENCONTRADA,
@@ -158,37 +121,23 @@ class TestListarPersonasAdminHappyPath:
             nombre="Pedrito",
             apellido="López",
             moderacion="aprobada",
-            photos=["https://fake-cdn.example.com/personas/minor.jpg"],
+            photos=["https://x/minor.jpg"],
         )
         fake_repo._personas.append(minor)
-
-        results = use_case.execute(limite=10, estado=None, moderacion=None)
-
-        assert len(results) == 1
-        assert results[0].nombre == "Pedrito"   # menores ya NO se enmascaran
-        assert results[0].apellido == "López"
+        res = use_case.execute(limite=10, estado=None, moderacion=None)
+        assert len(res.data) == 1
+        assert res.data[0].nombre == "Pedrito"
+        assert res.data[0].apellido == "López"
 
     def test_respects_limite(self, use_case, fake_repo):
-        """Returns at most `limit` results."""
-        # Add 10 personas
-        for i in range(10):
-            persona = PersonaBase(
-                person_id=uuid4(),
-                estado=Estado.ENCONTRADA,
-                es_menor=False,
-                nombre=f"P{i}",
-                apellido="Test",
-                moderacion="aprobada",
-                photos=[f"https://fake-cdn.example.com/personas/{i}.jpg"],
-            )
-            fake_repo._personas.append(persona)
-
-        results = use_case.execute(limite=5, estado=None, moderacion=None)
-
-        assert len(results) == 5
+        _seed(fake_repo, 10)
+        res = use_case.execute(limite=5, estado=None, moderacion=None)
+        assert len(res.data) == 5
+        assert res.meta.total_records == 10
+        assert res.meta.total_pages == 2
 
     def test_empty_list_when_no_data(self, use_case):
-        """Returns [] when fake repo empty."""
-        results = use_case.execute(limite=10, estado=None, moderacion=None)
-
-        assert results == []
+        res = use_case.execute(limite=10, estado=None, moderacion=None)
+        assert res.data == []
+        assert res.meta.total_records == 0
+        assert res.meta.total_pages == 0

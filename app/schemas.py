@@ -33,26 +33,30 @@ class Candidato(BaseModel):
     confianza: str = Field(..., description="'alta' | 'media' | 'baja'.")
 
 
-class PaginationMeta(BaseModel):
-    """Metadata for paginated result sets."""
+class PageMeta(BaseModel):
+    """Metadatos de paginación (para listados y búsquedas)."""
 
-    total_records: int = Field(..., description="Total available records.")
-    current_page: int = Field(..., description="Current page derived from limit/offset.")
-    total_pages: int = Field(..., description="Total available pages.")
-    limit: int = Field(..., description="Maximum records returned by this page.")
-    offset: int = Field(..., description="Number of records skipped before this page.")
+    total_records: int = Field(..., description="Total de registros que cumplen el filtro (sin paginar).")
+    current_page: int = Field(..., description="Página actual (1-based).")
+    total_pages: int = Field(..., description="Total de páginas disponibles.")
+    limit: int = Field(..., description="Tamaño de página aplicado.")
+    offset: int = Field(..., description="Desplazamiento aplicado.")
 
 
 class ResultadoBusqueda(BaseModel):
-    """Respuesta del flujo FAMILIAR: su código + lista de candidatos."""
+    """Respuesta del flujo FAMILIAR: su código + lista de candidatos + paginación.
+
+    `coincidencias` se mantiene por compatibilidad; `meta` trae el total real y las páginas.
+    """
 
     codigo: str = Field(..., description="Código del registro de búsqueda generado.")
-    total: int
+    total: int = Field(..., description="Cantidad de coincidencias en ESTA página (len de coincidencias).")
     coincidencias: list[Candidato]
     data: list[Candidato] = Field(
-        ..., description="Paginated results for new clients; same items as coincidencias."
+        ...,
+        description="Resultados paginados para clientes nuevos; mismos items que coincidencias.",
     )
-    meta: PaginationMeta
+    meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
 
 
 class AlertaFamiliar(BaseModel):
@@ -182,3 +186,32 @@ class AdminStats(BaseModel):
     reportes_publicaciones_pendientes: int = Field(..., description="…de esos, pendientes.")
     reportes_fallas: int = Field(..., description="Reportes de fallas de la página.")
     reportes_fallas_pendientes: int = Field(..., description="…de esos, pendientes.")
+
+
+class PaginaPersonas(BaseModel):
+    """Listado paginado de personas para el panel de admin: `data` + `meta`."""
+
+    data: list[PersonaAdmin]
+    meta: PageMeta
+
+
+class PersonaPublica(BaseModel):
+    """Vista PÚBLICA de una persona (sin datos sensibles: no teléfono, no documento)."""
+
+    person_id: str
+    estado: str
+    es_menor: bool = False
+    nombre: str | None = Field(None, description="Nombre (null si no se registró o si es menor con baja confianza).")
+    apellido: str | None = None
+    edad: str | None = None
+    ubicacion: str | None = Field(None, description="Refugio / última ubicación conocida.")
+    descripcion: str | None = None
+    image_url: str | None = None
+    created_at: datetime
+
+
+class PaginaPublica(BaseModel):
+    """Listado público paginado: `data` + `meta`. Sin teléfono ni documento."""
+
+    data: list[PersonaPublica]
+    meta: PageMeta

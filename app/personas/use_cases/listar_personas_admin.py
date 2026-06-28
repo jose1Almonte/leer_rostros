@@ -2,7 +2,8 @@
 
 from app.domain.privacy import MenoresPrivacy
 from app.personas.repositories.persona import PersonaRepository
-from app.schemas import PersonaAdmin
+from app.schemas import PaginaPersonas, PageMeta, PersonaAdmin
+from app.shared._helpers import construir_meta, normaliza_paginacion
 
 
 class ListarPersonasAdmin:
@@ -18,11 +19,15 @@ class ListarPersonasAdmin:
         estado: str | None,
         moderacion: str | None,
         offset: int = 0,
-    ) -> list[PersonaAdmin]:
-        """List personas for admin view (paginado con offset).
+        page: int | None = None,
+    ) -> PaginaPersonas:
+        """List personas for admin view (paginado: limit + offset/page).
 
         Returns:
-            List of PersonaAdmin with privacy masking applied.
+            PaginaPersonas con `data` (PersonaAdmin con privacy aplicada) y `meta`.
         """
+        limite, offset = normaliza_paginacion(limite, offset, page)
         results = self._repo.list_admin(limite, estado, moderacion, offset=offset)
-        return [MenoresPrivacy(PersonaAdmin(**d)) for d in results]
+        total = self._repo.count_admin(estado, moderacion)
+        data = [MenoresPrivacy(PersonaAdmin(**d)) for d in results]
+        return PaginaPersonas(data=data, meta=PageMeta(**construir_meta(total, limite, offset)))

@@ -2,9 +2,9 @@
 
 from app.domain.privacy import MenoresPrivacy
 from app.personas.repositories.persona import PersonaRepository
-from app.personas.use_cases._pagination import build_pagination_meta, normalize_pagination
-from app.schemas import Candidato, ResultadoBusqueda
+from app.schemas import Candidato, PageMeta, ResultadoBusqueda
 from app.shared._exceptions import PersonaNotFoundError, PersonaValidationError
+from app.shared._helpers import construir_meta, normaliza_paginacion
 
 
 class ListarCoincidenciasBusqueda:
@@ -25,12 +25,12 @@ class ListarCoincidenciasBusqueda:
         if not codigo.strip():
             raise PersonaValidationError("Indica el codigo de la busqueda.")
 
-        limite, offset = normalize_pagination(limite=limite, offset=offset, page=page)
+        limite, offset = normaliza_paginacion(limite, offset, page)
         embedding = self._repo.get_busqueda_embedding(codigo.strip())
         if embedding is None:
             raise PersonaNotFoundError("No existe esa busqueda.")
 
-        total_records = self._repo.count_search_by_estado("encontrada")
+        total = self._repo.count_aprobadas("encontrada")
         encontrados = self._repo.search_by_estado(
             embedding, "encontrada", limite, offset=offset
         )
@@ -40,9 +40,5 @@ class ListarCoincidenciasBusqueda:
             total=len(candidatos),
             coincidencias=candidatos,
             data=candidatos,
-            meta=build_pagination_meta(
-                total_records=total_records,
-                limit=limite,
-                offset=offset,
-            ),
+            meta=PageMeta(**construir_meta(total, limite, offset)),
         )

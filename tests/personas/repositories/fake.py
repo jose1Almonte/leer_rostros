@@ -58,7 +58,7 @@ class FakePersonaRepository:
     def search_by_estado(
         self, embedding: Any, estado: str | None, limit: int, offset: int = 0
     ) -> list[dict]:
-        """Return stored personas filtered by estado, with fake distances.
+        """Return stored personas filtered by estado, with fake distances (paginado).
 
         Simulates a cosine-distance search by assigning ascending distances
         to stored personas (0.10, 0.20, 0.30, ...) so that policy.is_match
@@ -71,22 +71,47 @@ class FakePersonaRepository:
             and (estado is None or p.estado.value == estado)
         ]
         results = []
-        start = max(0, offset)
-        for i, persona in enumerate(candidates[start: start + limit], start=start):
+        for i, persona in enumerate(candidates):
             distancia = round(0.10 * (i + 1), 4)
             results.append(self._to_candidato_dict(persona, distancia))
-        return results
+        off = max(0, offset)
+        return results[off: off + limit]
 
-    def count_search_by_estado(self, estado: str | None) -> int:
-        """Count stored public personas filtered by estado."""
-        return len(
-            [
-                p
-                for p in self._personas
-                if p.moderacion == "aprobada"
-                and (estado is None or p.estado.value == estado)
-            ]
-        )
+    def list_publico(self, estado: str, limit: int, offset: int = 0) -> list[dict]:
+        """Listado público (encontradas aprobadas) con campos no sensibles."""
+        filtered = [
+            {
+                "person_id": str(p.person_id),
+                "estado": p.estado.value,
+                "es_menor": p.es_menor,
+                "nombre": p.nombre,
+                "apellido": p.apellido,
+                "edad": p.edad,
+                "ubicacion": p.ubicacion or p.refugio,
+                "descripcion": p.descripcion,
+                "image_url": p.photos[0] if p.photos else None,
+                "created_at": datetime.now(),
+            }
+            for p in self._personas
+            if p.estado.value == estado and p.moderacion == "aprobada"
+        ]
+        off = max(0, offset)
+        return filtered[off: off + limit]
+
+    def count_aprobadas(self, estado: str | None = None) -> int:
+        return len({
+            str(p.person_id)
+            for p in self._personas
+            if p.moderacion == "aprobada" and (estado is None or p.estado.value == estado)
+        })
+
+    def count_admin(self, estado: str | None = None, moderacion: str | None = None) -> int:
+        return len({
+            str(p.person_id)
+            for p in self._personas
+            if (not estado or p.estado.value == estado)
+            and (not moderacion or p.moderacion == moderacion)
+        })
 
     def get_busqueda_embedding(self, codigo: str) -> Any | None:
         """Return first stored fake embedding for a search code."""

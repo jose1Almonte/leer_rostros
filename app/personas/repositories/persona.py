@@ -68,14 +68,6 @@ class PersonaRepository:
         LIMIT %s OFFSET %s
     """
 
-    _COUNT_SEARCH = """
-        SELECT count(DISTINCT p.person_id)
-        FROM personas p
-        JOIN persona_embeddings pe ON pe.foto_id = p.id
-        WHERE p.moderacion = 'aprobada'
-            {estado_filter}
-    """
-
     _GET_BUSQUEDA_EMBEDDING = """
         SELECT pe.embedding
         FROM personas p
@@ -112,6 +104,19 @@ class PersonaRepository:
                max(codigo), max(moderacion), array_agg(image_url), min(created_at)
         FROM personas {where}
         GROUP BY person_id ORDER BY min(created_at) DESC LIMIT %s OFFSET %s
+    """
+
+    # Listado PÚBLICO: una fila por persona, solo campos no sensibles, visibles (aprobada).
+    _LIST_PUBLICO = """
+        SELECT person_id, max(estado), bool_or(es_menor), max(nombre), max(apellido),
+               max(edad), coalesce(max(refugio), max(ubicacion)) AS ubicacion,
+               max(descripcion), (array_agg(image_url ORDER BY created_at))[1] AS image_url,
+               min(created_at) AS created_at
+        FROM personas
+        WHERE estado = %s AND moderacion = 'aprobada'
+        GROUP BY person_id
+        ORDER BY min(created_at) DESC
+        LIMIT %s OFFSET %s
     """
 
     # Conteos reales para el dashboard de admin (no dependen de paginación).
@@ -213,7 +218,7 @@ class PersonaRepository:
         """Search personas by embedding, filtered by moderacion='aprobada'.
 
         Uses ROW_NUMBER() OVER (PARTITION BY p.person_id ORDER BY pe.embedding <=> %s ASC)
-        to get the best match per person across all embeddings.
+        to get the best match per person across all embeddings. Soporta paginación (offset).
 
         Returns list of Candidato-shaped dicts with distancia, coincidencia, confianza.
         Does NOT apply privacy masking (call MenoresPrivacy at the endpoint level).
@@ -229,20 +234,62 @@ class PersonaRepository:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_candidato_dict(r) for r in rows]
 
-    def count_search_by_estado(self, estado: str | None) -> int:
-        """Count public searchable personas with embeddings for pagination metadata."""
-        estado_filter = "AND p.estado = %s" if estado else ""
-        params: tuple = (estado,) if estado else ()
-        sql = self._COUNT_SEARCH.format(estado_filter=estado_filter)
-        with self._pool.connection() as conn:
-            row = conn.execute(sql, params).fetchone()
-        return int(row[0]) if row else 0
-
     def get_busqueda_embedding(self, codigo: str) -> Any | None:
         """Return the stored query embedding for a FAMILIAR search code."""
         with self._pool.connection() as conn:
             row = conn.execute(self._GET_BUSQUEDA_EMBEDDING, (codigo,)).fetchone()
         return row[0] if row else None
+
+    def list_publico(self, estado: str, limit: int, offset: int = 0) -> list[dict]:
+        """Listado PÚBLICO paginado (sin datos sensibles). Solo moderacion='aprobada'."""
+        with self._pool.connection() as conn:
+            rows = conn.execute(self._LIST_PUBLICO, (estado, limit, max(0, offset))).fetchall()
+        return [
+            {
+                "person_id": str(r[0]),
+                "estado": r[1],
+                "es_menor": bool(r[2]),
+                "nombre": r[3],
+                "apellido": r[4],
+                "edad": r[5],
+                "ubicacion": r[6],
+                "descripcion": r[7],
+                "image_url": r[8],
+                "created_at": r[9],
+            }
+            for r in rows
+        ]
+
+    def count_aprobadas(self, estado: str | None = None) -> int:
+        """Cuenta personas únicas visibles (moderacion='aprobada'), opcional por estado.
+
+        Es el universo de candidatos de una búsqueda → total_records para paginar /buscados.
+        """
+        sql = (
+            "SELECT count(DISTINCT person_id) FROM personas WHERE moderacion='aprobada'"
+        )
+        params: tuple = ()
+        if estado in ("buscada", "encontrada"):
+            sql += " AND estado = %s"
+            params = (estado,)
+        with self._pool.connection() as conn:
+            return int(conn.execute(sql, params).fetchone()[0])
+
+    def count_admin(
+        self, estado: str | None = None, moderacion: str | None = None
+    ) -> int:
+        """Cuenta personas únicas con los mismos filtros que `list_admin` (para meta)."""
+        conds, args = [], []
+        if estado in ("buscada", "encontrada"):
+            conds.append("estado = %s")
+            args.append(estado)
+        if moderacion in ("aprobada", "rechazada", "pendiente"):
+            conds.append("moderacion = %s")
+            args.append(moderacion)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        sql = f"SELECT count(DISTINCT person_id) FROM personas {where}"
+        with self._pool.connection() as conn:
+            return int(conn.execute(sql, tuple(args)).fetchone()[0])
 
     def search_admin(
         self, embedding: Any, estado: str | None, limit: int

@@ -6,10 +6,15 @@ from app.domain.matching import MatchingPolicy
 from app.domain.persona import Estado, PersonaBase
 from app.domain.privacy import MenoresPrivacy
 from app.personas.repositories.persona import PersonaRepository
-from app.personas.use_cases._pagination import build_pagination_meta, normalize_pagination
-from app.schemas import Candidato, ResultadoBusqueda
+from app.schemas import Candidato, PageMeta, ResultadoBusqueda
 from app.shared._exceptions import PersonaValidationError, RostroNoDetectadoError
-from app.shared._helpers import ProcessedPhotos, _embedding_consulta, _gen_codigo
+from app.shared._helpers import (
+    ProcessedPhotos,
+    _embedding_consulta,
+    _gen_codigo,
+    construir_meta,
+    normaliza_paginacion,
+)
 
 
 class RegistrarBusqueda:
@@ -58,7 +63,7 @@ class RegistrarBusqueda:
         if not (doc_numero or (nombre and nombre.strip())):
             raise PersonaValidationError("Indica al menos el nombre o el número de identificación.")
 
-        limite, offset = normalize_pagination(limite=limite, offset=offset, page=page)
+        limite, offset = normaliza_paginacion(limite, offset, page)
 
         # Build domain object
         person_id = uuid4()
@@ -81,12 +86,10 @@ class RegistrarBusqueda:
         # Persist
         self._repo.add(person_id, persona, procesadas)
 
-        # Search
+        # Search (paginado) + total real del universo de encontrados visibles
         embedding = _embedding_consulta(procesadas)
-        total_records = self._repo.count_search_by_estado("encontrada")
-        encontrados = self._repo.search_by_estado(
-            embedding, "encontrada", limite, offset=offset
-        )
+        encontrados = self._repo.search_by_estado(embedding, "encontrada", limite, offset)
+        total = self._repo.count_aprobadas("encontrada")
 
         # Apply privacy and build response
         candidatos = [MenoresPrivacy(Candidato(**d)) for d in encontrados]
@@ -95,9 +98,5 @@ class RegistrarBusqueda:
             total=len(candidatos),
             coincidencias=candidatos,
             data=candidatos,
-            meta=build_pagination_meta(
-                total_records=total_records,
-                limit=limite,
-                offset=offset,
-            ),
+            meta=PageMeta(**construir_meta(total, limite, offset)),
         )

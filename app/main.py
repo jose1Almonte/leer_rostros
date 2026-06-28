@@ -36,6 +36,7 @@ from app.personas.use_cases import (
     EliminarPersona,
     ListarCoincidenciasBusqueda,
     ListarPersonasAdmin,
+    ListarPublico,
     ModerarPersona,
     RegistrarBusqueda,
     RegistrarEncontrado,
@@ -52,6 +53,8 @@ from app.schemas import (
     Candidato,
     LoginBody,
     LoginResp,
+    PaginaPersonas,
+    PaginaPublica,
     ImportarEncontradoIn,
     ImportarResultado,
     PersonaAdmin,
@@ -241,8 +244,10 @@ Un familiar sube la foto de a quién busca. Se registra como *buscada* y se devu
 
 \\* Manda **al menos** `nombre` o `doc_numero` (validación).
 El front decide cuántas coincidencias recibir con **`limit`** (1-50). **`limite`**
-se mantiene por compatibilidad y **`offset`** / **`page`** permiten cargar más
-coincidencias sin traer todo el listado en una sola respuesta.
+se mantiene por compatibilidad. **`offset`** / **`page`** permiten cargar más
+coincidencias sin traer todo el listado en una sola respuesta. La respuesta incluye
+**`data`** y **`meta`** (`total_records`, `current_page`, `total_pages`) además de
+`coincidencias` (que se mantiene por compatibilidad).
 
 ### 🟢 Flujo RESCATISTA — `POST /encontrados`
 Quien encontró a alguien lo registra. Si un familiar ya lo buscaba, la respuesta trae
@@ -287,8 +292,9 @@ El token se obtiene de `POST /admin/login` (abajo).
 - `GET /admin/stats` — **conteos reales** para el dashboard (total, buscadas, encontradas,
   menores, ocultas, pendientes, reportes). Usalo para los totales; NO cuentes el largo de
   `/admin/personas` (viene topado por `limite`).
-- `GET /admin/personas` — listar registros. Query: `limite`, `offset` (paginación),
-  `estado`, `moderacion`. Para recorrer todo: `limite=100&offset=0`, luego `offset=100`, etc.
+- `GET /admin/personas` — listar registros **paginados**. Query: `limite`, `offset` o
+  `page`, `estado`, `moderacion`. Devuelve **`{data:[...], meta:{total_records, current_page,
+  total_pages, limit, offset}}`**. Recorrer todo: `limite=100&page=1`, `page=2`, …
 - `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
 - `DELETE /admin/personas/{person_id}` — borrar.
 - `GET /admin/reportes` — ver reportes recibidos (filtros `tipo`, `estado`).
@@ -387,10 +393,10 @@ async def registrar_busqueda(
         None, description="Teléfono del familiar para el reencuentro."
     ),
     limite: int = Form(
-        10, description="Cuántas coincidencias devolver (1-50). El front lo decide."
+        10, description="Tamaño de página (1-50). Cuántas coincidencias por página."
     ),
     limit: int | None = Form(
-        None, description="Cantidad de coincidencias por pagina (1-50)."
+        None, description="Alias de limite para clientes que usan limit."
     ),
     offset: int = Form(0, description="Cantidad de coincidencias a omitir."),
     page: int | None = Form(
@@ -496,6 +502,28 @@ async def registrar_encontrado(
     )
 
 
+@app.get(
+    "/encontrados",
+    response_model=PaginaPublica,
+    tags=["rescatista"],
+    summary="Directorio PÚBLICO de personas encontradas (paginado)",
+)
+def listar_encontrados_publico(
+    limite: int = 24,
+    offset: int = 0,
+    page: int | None = None,
+):
+    """Lista pública y paginada de personas **encontradas** (visibles/aprobadas), para
+    mostrar un directorio en el front. Devuelve `{data, meta}` SIN datos sensibles
+    (no teléfono ni documento). Los menores van con nombre/apellido en `null`.
+
+    Paginar con `limite` + `offset` o `page` (1-based)."""
+    use_case = ListarPublico(get_repo())
+    return _use_case_execute(
+        use_case.execute, estado="encontrada", limite=limite, offset=offset, page=page
+    )
+
+
 @app.post(
     "/buscar",
     response_model=list[Candidato],
@@ -524,30 +552,37 @@ async def buscar_admin(
 
 @app.get(
     "/admin/personas",
-    response_model=list[PersonaAdmin],
+    response_model=PaginaPersonas | list[PersonaAdmin],
     tags=["admin"],
     dependencies=[Depends(get_current_admin)],
     responses=_ADMIN_RESPONSES,
-    summary="Superadmin: listar registros",
+    summary="Superadmin: listar registros (paginado)",
 )
 def listar(
     limite: int = 100,
     estado: str | None = None,
     moderacion: str | None = None,
     offset: int = 0,
+    page: int | None = None,
+    paginado: bool = False,
 ):
-    """Lista registros. Filtra por estado y/o moderación (para revisar/aprobar).
+    """Lista registros. Filtra por `estado` y/o `moderacion`; pagina con `limite` +
+    `offset` (ej. `limite=100&offset=100`) o `page` (1-based).
 
-    Paginación: usa `limite` + `offset` (ej. página 2 de 100 → limite=100&offset=100).
-    Para el TOTAL real usa `GET /admin/stats` (este endpoint solo devuelve la página)."""
+    **Compatibilidad:** por defecto devuelve un **array** de registros (la página actual).
+    Con **`?paginado=true`** devuelve el envelope **`{data:[...], meta:{total_records,
+    current_page, total_pages, limit, offset}}`** (usá esto para mostrar total de páginas;
+    o `GET /admin/stats` para el total real)."""
     use_case = ListarPersonasAdmin(get_repo())
-    return _use_case_execute(
+    pagina = _use_case_execute(
         use_case.execute,
         limite=limite,
         estado=estado,
         moderacion=moderacion,
         offset=offset,
+        page=page,
     )
+    return pagina if paginado else pagina.data
 
 
 @app.get(
