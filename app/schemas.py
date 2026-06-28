@@ -33,12 +33,26 @@ class Candidato(BaseModel):
     confianza: str = Field(..., description="'alta' | 'media' | 'baja'.")
 
 
+class PageMeta(BaseModel):
+    """Metadatos de paginación (para listados y búsquedas)."""
+
+    total_records: int = Field(..., description="Total de registros que cumplen el filtro (sin paginar).")
+    current_page: int = Field(..., description="Página actual (1-based).")
+    total_pages: int = Field(..., description="Total de páginas disponibles.")
+    limit: int = Field(..., description="Tamaño de página aplicado.")
+    offset: int = Field(..., description="Desplazamiento aplicado.")
+
+
 class ResultadoBusqueda(BaseModel):
-    """Respuesta del flujo FAMILIAR: su código + lista de candidatos."""
+    """Respuesta del flujo FAMILIAR: su código + lista de candidatos + paginación.
+
+    `coincidencias` se mantiene por compatibilidad; `meta` trae el total real y las páginas.
+    """
 
     codigo: str = Field(..., description="Código del registro de búsqueda generado.")
-    total: int
+    total: int = Field(..., description="Cantidad de coincidencias en ESTA página (len de coincidencias).")
     coincidencias: list[Candidato]
+    meta: PageMeta | None = Field(None, description="Paginación: total real, página actual y total de páginas.")
 
 
 class AlertaFamiliar(BaseModel):
@@ -168,3 +182,10 @@ class AdminStats(BaseModel):
     reportes_publicaciones_pendientes: int = Field(..., description="…de esos, pendientes.")
     reportes_fallas: int = Field(..., description="Reportes de fallas de la página.")
     reportes_fallas_pendientes: int = Field(..., description="…de esos, pendientes.")
+
+
+class PaginaPersonas(BaseModel):
+    """Listado paginado de personas para el panel de admin: `data` + `meta`."""
+
+    data: list[PersonaAdmin]
+    meta: PageMeta

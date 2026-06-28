@@ -52,9 +52,9 @@ class FakePersonaRepository:
         return persona.photos
 
     def search_by_estado(
-        self, embedding: Any, estado: str | None, limit: int
+        self, embedding: Any, estado: str | None, limit: int, offset: int = 0
     ) -> list[dict]:
-        """Return stored personas filtered by estado, with fake distances.
+        """Return stored personas filtered by estado, with fake distances (paginado).
 
         Simulates a cosine-distance search by assigning ascending distances
         to stored personas (0.10, 0.20, 0.30, ...) so that policy.is_match
@@ -67,10 +67,26 @@ class FakePersonaRepository:
             and (estado is None or p.estado.value == estado)
         ]
         results = []
-        for i, persona in enumerate(candidates[:limit]):
+        for i, persona in enumerate(candidates):
             distancia = round(0.10 * (i + 1), 4)
             results.append(self._to_candidato_dict(persona, distancia))
-        return results
+        off = max(0, offset)
+        return results[off: off + limit]
+
+    def count_aprobadas(self, estado: str | None = None) -> int:
+        return len({
+            str(p.person_id)
+            for p in self._personas
+            if p.moderacion == "aprobada" and (estado is None or p.estado.value == estado)
+        })
+
+    def count_admin(self, estado: str | None = None, moderacion: str | None = None) -> int:
+        return len({
+            str(p.person_id)
+            for p in self._personas
+            if (not estado or p.estado.value == estado)
+            and (not moderacion or p.moderacion == moderacion)
+        })
 
     def search_admin(
         self, embedding: Any, estado: str | None, limit: int

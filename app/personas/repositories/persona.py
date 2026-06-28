@@ -65,7 +65,7 @@ class PersonaRepository:
         JOIN personas p2 ON p2.id = b.foto_id
         WHERE b.rn = 1
         ORDER BY b.distancia ASC
-        LIMIT %s
+        LIMIT %s OFFSET %s
     """
 
     # Admin search: same ROW_NUMBER() but NO moderacion filter
@@ -191,12 +191,12 @@ class PersonaRepository:
         return urls
 
     def search_by_estado(
-        self, embedding: Any, estado: str | None, limit: int
+        self, embedding: Any, estado: str | None, limit: int, offset: int = 0
     ) -> list[dict]:
         """Search personas by embedding, filtered by moderacion='aprobada'.
 
         Uses ROW_NUMBER() OVER (PARTITION BY p.person_id ORDER BY pe.embedding <=> %s ASC)
-        to get the best match per person across all embeddings.
+        to get the best match per person across all embeddings. Soporta paginación (offset).
 
         Returns list of Candidato-shaped dicts with distancia, coincidencia, confianza.
         Does NOT apply privacy masking (call MenoresPrivacy at the endpoint level).
@@ -206,11 +206,42 @@ class PersonaRepository:
         params: tuple = (embedding, embedding)
         if estado:
             params = params + (estado,)
-        params = params + (limit,)
+        params = params + (limit, max(0, offset))
         sql = self._SEARCH.format(cols=cols, estado_filter=estado_filter)
         with self._pool.connection() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_candidato_dict(r) for r in rows]
+
+    def count_aprobadas(self, estado: str | None = None) -> int:
+        """Cuenta personas únicas visibles (moderacion='aprobada'), opcional por estado.
+
+        Es el universo de candidatos de una búsqueda → total_records para paginar /buscados.
+        """
+        sql = (
+            "SELECT count(DISTINCT person_id) FROM personas WHERE moderacion='aprobada'"
+        )
+        params: tuple = ()
+        if estado in ("buscada", "encontrada"):
+            sql += " AND estado = %s"
+            params = (estado,)
+        with self._pool.connection() as conn:
+            return int(conn.execute(sql, params).fetchone()[0])
+
+    def count_admin(
+        self, estado: str | None = None, moderacion: str | None = None
+    ) -> int:
+        """Cuenta personas únicas con los mismos filtros que `list_admin` (para meta)."""
+        conds, args = [], []
+        if estado in ("buscada", "encontrada"):
+            conds.append("estado = %s")
+            args.append(estado)
+        if moderacion in ("aprobada", "rechazada", "pendiente"):
+            conds.append("moderacion = %s")
+            args.append(moderacion)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        sql = f"SELECT count(DISTINCT person_id) FROM personas {where}"
+        with self._pool.connection() as conn:
+            return int(conn.execute(sql, tuple(args)).fetchone()[0])
 
     def search_admin(
         self, embedding: Any, estado: str | None, limit: int

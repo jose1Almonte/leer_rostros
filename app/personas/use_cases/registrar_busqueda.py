@@ -6,9 +6,15 @@ from app.domain.matching import MatchingPolicy
 from app.domain.persona import Estado, PersonaBase
 from app.domain.privacy import MenoresPrivacy
 from app.personas.repositories.persona import PersonaRepository
-from app.schemas import Candidato, ResultadoBusqueda
+from app.schemas import Candidato, PageMeta, ResultadoBusqueda
 from app.shared._exceptions import PersonaValidationError, RostroNoDetectadoError
-from app.shared._helpers import LIMITE_MAX, ProcessedPhotos, _embedding_consulta, _gen_codigo
+from app.shared._helpers import (
+    ProcessedPhotos,
+    _embedding_consulta,
+    _gen_codigo,
+    construir_meta,
+    normaliza_paginacion,
+)
 
 
 class RegistrarBusqueda:
@@ -29,6 +35,8 @@ class RegistrarBusqueda:
         doc_numero: str | None,
         telefono_contacto: str | None,
         limite: int,
+        offset: int = 0,
+        page: int | None = None,
     ) -> ResultadoBusqueda:
         """Register a missing-person search and return ranked candidates.
 
@@ -55,7 +63,7 @@ class RegistrarBusqueda:
         if not (doc_numero or (nombre and nombre.strip())):
             raise PersonaValidationError("Indica al menos el nombre o el número de identificación.")
 
-        limite = max(1, min(LIMITE_MAX, limite))
+        limite, offset = normaliza_paginacion(limite, offset, page)
 
         # Build domain object
         person_id = uuid4()
@@ -78,9 +86,10 @@ class RegistrarBusqueda:
         # Persist
         self._repo.add(person_id, persona, procesadas)
 
-        # Search
+        # Search (paginado) + total real del universo de encontrados visibles
         embedding = _embedding_consulta(procesadas)
-        encontrados = self._repo.search_by_estado(embedding, "encontrada", limite)
+        encontrados = self._repo.search_by_estado(embedding, "encontrada", limite, offset)
+        total = self._repo.count_aprobadas("encontrada")
 
         # Apply privacy and build response
         candidatos = [MenoresPrivacy(Candidato(**d)) for d in encontrados]
@@ -88,4 +97,5 @@ class RegistrarBusqueda:
             codigo=codigo,
             total=len(candidatos),
             coincidencias=candidatos,
+            meta=PageMeta(**construir_meta(total, limite, offset)),
         )
