@@ -390,6 +390,7 @@ app = FastAPI(
     version="2.1.0",
     openapi_tags=tags,
     lifespan=lifespan,
+    swagger_ui_parameters={"persistAuthorization": True},
 )
 
 # CORS abierto a TODOS los orígenes (de prueba). Cualquier front (vzlaencuentra.com,

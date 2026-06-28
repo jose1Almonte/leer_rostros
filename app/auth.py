@@ -18,7 +18,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
-from fastapi import Header, HTTPException
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 
 from app.config import get_settings
@@ -133,9 +134,15 @@ def touch_last_login(conn, admin_id: uuid.UUID) -> None:
 # Guard de FastAPI
 # --------------------------------------------------------------------------- #
 
+_bearer = HTTPBearer(
+    scheme_name="Bearer",
+    description="Token JWT obtenido de POST /admin/login",
+    auto_error=False,
+)
+
 
 def get_current_admin(
-    authorization: str | None = Header(None, description="Bearer <token>."),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> Admin:
     """Dependency de FastAPI: protege endpoints de admin.
 
@@ -143,17 +150,14 @@ def get_current_admin(
         @app.get("/admin/...", dependencies=[Depends(get_current_admin)])
 
     Flujo:
-      1. Lee `Authorization: Bearer <token>`.
+      1. Lee `Authorization: Bearer <token>` desde el scheme HTTPBearer.
       2. Decodifica el JWT (firma + expiración).
       3. Carga la fila del admin por `sub` (= admin_id).
       4. Verifica que esté `is_active`.
     """
-    if not authorization or not authorization.startswith("Bearer "):
+    if credentials is None:
         raise HTTPException(401, "No autorizado. Iniciá sesión en POST /admin/login.")
-    token = authorization[len("Bearer ") :].strip()
-    if not token:
-        raise HTTPException(401, "No autorizado. Token vacío.")
-
+    token = credentials.credentials
     payload = decode_access_token(token)
     sub = payload.get("sub")
     if not sub:
