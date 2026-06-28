@@ -189,3 +189,25 @@ class PaginaPersonas(BaseModel):
 
     data: list[PersonaAdmin]
     meta: PageMeta
+
+
+class PersonaPublica(BaseModel):
+    """Vista PÚBLICA de una persona (sin datos sensibles: no teléfono, no documento)."""
+
+    person_id: str
+    estado: str
+    es_menor: bool = False
+    nombre: str | None = Field(None, description="Nombre (null si no se registró o si es menor con baja confianza).")
+    apellido: str | None = None
+    edad: str | None = None
+    ubicacion: str | None = Field(None, description="Refugio / última ubicación conocida.")
+    descripcion: str | None = None
+    image_url: str | None = None
+    created_at: datetime
+
+
+class PaginaPublica(BaseModel):
+    """Listado público paginado: `data` + `meta`. Sin teléfono ni documento."""
+
+    data: list[PersonaPublica]
+    meta: PageMeta

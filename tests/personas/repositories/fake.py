@@ -73,6 +73,27 @@ class FakePersonaRepository:
         off = max(0, offset)
         return results[off: off + limit]
 
+    def list_publico(self, estado: str, limit: int, offset: int = 0) -> list[dict]:
+        """Listado público (encontradas aprobadas) con campos no sensibles."""
+        filtered = [
+            {
+                "person_id": str(p.person_id),
+                "estado": p.estado.value,
+                "es_menor": p.es_menor,
+                "nombre": p.nombre,
+                "apellido": p.apellido,
+                "edad": p.edad,
+                "ubicacion": p.ubicacion or p.refugio,
+                "descripcion": p.descripcion,
+                "image_url": p.photos[0] if p.photos else None,
+                "created_at": datetime.now(),
+            }
+            for p in self._personas
+            if p.estado.value == estado and p.moderacion == "aprobada"
+        ]
+        off = max(0, offset)
+        return filtered[off: off + limit]
+
     def count_aprobadas(self, estado: str | None = None) -> int:
         return len({
             str(p.person_id)

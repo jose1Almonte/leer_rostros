@@ -35,6 +35,7 @@ from app.personas.use_cases import (
     BuscarAdmin,
     EliminarPersona,
     ListarPersonasAdmin,
+    ListarPublico,
     ModerarPersona,
     RegistrarBusqueda,
     RegistrarEncontrado,
@@ -52,6 +53,7 @@ from app.schemas import (
     LoginBody,
     LoginResp,
     PaginaPersonas,
+    PaginaPublica,
     ImportarEncontradoIn,
     ImportarResultado,
     PersonaAdmin,
@@ -455,6 +457,28 @@ async def registrar_encontrado(
         telefono_responsable=telefono_responsable,
         doc_responsable=doc_responsable,
         descripcion=descripcion,
+    )
+
+
+@app.get(
+    "/encontrados",
+    response_model=PaginaPublica,
+    tags=["rescatista"],
+    summary="Directorio PÚBLICO de personas encontradas (paginado)",
+)
+def listar_encontrados_publico(
+    limite: int = 24,
+    offset: int = 0,
+    page: int | None = None,
+):
+    """Lista pública y paginada de personas **encontradas** (visibles/aprobadas), para
+    mostrar un directorio en el front. Devuelve `{data, meta}` SIN datos sensibles
+    (no teléfono ni documento). Los menores van con nombre/apellido en `null`.
+
+    Paginar con `limite` + `offset` o `page` (1-based)."""
+    use_case = ListarPublico(get_repo())
+    return _use_case_execute(
+        use_case.execute, estado="encontrada", limite=limite, offset=offset, page=page
     )
 
 

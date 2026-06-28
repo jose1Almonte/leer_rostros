@@ -97,6 +97,19 @@ class PersonaRepository:
         GROUP BY person_id ORDER BY min(created_at) DESC LIMIT %s OFFSET %s
     """
 
+    # Listado PÚBLICO: una fila por persona, solo campos no sensibles, visibles (aprobada).
+    _LIST_PUBLICO = """
+        SELECT person_id, max(estado), bool_or(es_menor), max(nombre), max(apellido),
+               max(edad), coalesce(max(refugio), max(ubicacion)) AS ubicacion,
+               max(descripcion), (array_agg(image_url ORDER BY created_at))[1] AS image_url,
+               min(created_at) AS created_at
+        FROM personas
+        WHERE estado = %s AND moderacion = 'aprobada'
+        GROUP BY person_id
+        ORDER BY min(created_at) DESC
+        LIMIT %s OFFSET %s
+    """
+
     # Conteos reales para el dashboard de admin (no dependen de paginación).
     _STATS_PERSONAS = """
         SELECT
@@ -211,6 +224,26 @@ class PersonaRepository:
         with self._pool.connection() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_candidato_dict(r) for r in rows]
+
+    def list_publico(self, estado: str, limit: int, offset: int = 0) -> list[dict]:
+        """Listado PÚBLICO paginado (sin datos sensibles). Solo moderacion='aprobada'."""
+        with self._pool.connection() as conn:
+            rows = conn.execute(self._LIST_PUBLICO, (estado, limit, max(0, offset))).fetchall()
+        return [
+            {
+                "person_id": str(r[0]),
+                "estado": r[1],
+                "es_menor": bool(r[2]),
+                "nombre": r[3],
+                "apellido": r[4],
+                "edad": r[5],
+                "ubicacion": r[6],
+                "descripcion": r[7],
+                "image_url": r[8],
+                "created_at": r[9],
+            }
+            for r in rows
+        ]
 
     def count_aprobadas(self, estado: str | None = None) -> int:
         """Cuenta personas únicas visibles (moderacion='aprobada'), opcional por estado.
