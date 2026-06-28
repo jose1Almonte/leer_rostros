@@ -35,3 +35,27 @@ class ModificacionInvalidaError(Exception):
     def __init__(self, message: str):
         self.message = message
         super().__init__(message)
+
+
+class TestimonioValidationError(Exception):
+    """Raised when testimonio form data fails validation (HTTP 422)."""
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
+
+
+class ArchivoInvalidoError(Exception):
+    """Raised when the uploaded file format or size is not supported (HTTP 422)."""
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
+
+
+class TestimonioNotFoundError(Exception):
+    """Raised when a testimonio does not exist (HTTP 404)."""
+
+    def __init__(self, message: str = "No existe ese testimonio."):
+        self.message = message
+        super().__init__(message)

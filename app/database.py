@@ -184,4 +184,32 @@ def init_db() -> None:
             """
         )
 
+        # --- Tabla de testimonios: fotos/videos de reencuentro. ---
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS testimonios (
+                id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                person_id       UUID,
+                tipo            TEXT NOT NULL,
+                archivo_url     TEXT NOT NULL,
+                archivo_key     TEXT NOT NULL,
+                mime            TEXT NOT NULL,
+                bytes           INTEGER NOT NULL,
+                mensaje         TEXT,
+                nombre_testigo  TEXT,
+                contacto_testigo TEXT,
+                estado          TEXT NOT NULL DEFAULT 'pendiente',
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS testimonios_person_id_idx "
+            "ON testimonios (person_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS testimonios_estado_idx "
+            "ON testimonios (estado)"
+        )
+
         conn.execute("SELECT pg_advisory_unlock(927138)")

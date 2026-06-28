@@ -52,6 +52,15 @@ app/
       registrar_publicacion.py
       listar_reportes_admin.py
       cambiar_estado_reporte.py
+  testimonios/             # ⭐ bounded context: tabla testimonios
+    repositories/
+      testimonio.py        #   TestimonioRepository: SQL de testimonios
+    use_cases/
+      registrar_testimonio.py
+      listar_testimonios_publico.py
+      listar_testimonios_admin.py
+      moderar_testimonio.py
+      eliminar_testimonio.py
   auth.py                  # JWT + bcrypt, admins table, get_current_admin
   cli.py                   # CLI for admin management
   schemas.py               # Pydantic models
@@ -66,7 +75,8 @@ app/
 1. **FAMILIAR** (`POST /buscados`): Uploads photo of missing person, searches among found persons. Returns ranked candidates.
 2. **RESCATISTA** (`POST /encontrados`): Registers a found person. If a familiar was already searching, generates `AlertaFamiliar`.
 3. **PUBLIC REPORTES** (`POST /reportes/falla`, `POST /reportes/publicacion`): Anyone can report a bug or an inadequate publication.
-4. **ADMIN** (`POST /buscar`, `GET /admin/personas`, `PATCH .../moderacion`, `DELETE`, `GET /admin/reportes`, `PATCH /admin/reportes/{id}/estado`): Requires Bearer token.
+4. **TESTIMONIOS** (`POST /testimonios`, `GET /personas/{id}/testimonios`): Anyone can upload a photo/video testimonial of a successful reunion, optionally linked to a `person_id`. Testimonios start as `pendiente` until admin approval.
+5. **ADMIN** (`POST /buscar`, `GET /admin/personas`, `PATCH .../moderacion`, `DELETE`, `GET /admin/reportes`, `PATCH /admin/reportes/{id}/estado`, `GET /admin/testimonios`, `PATCH /admin/testimonios/{id}/estado`, `DELETE /admin/testimonios/{id}`): Requires Bearer token.
 
 ### Privacy protocol
 

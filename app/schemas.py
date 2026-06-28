@@ -266,6 +266,46 @@ class PersonaAdmin(BaseModel):
     created_at: datetime
 
 
+class TestimonioIn(BaseModel):
+    mensaje: str | None = None
+    nombre_testigo: str | None = None
+    contacto_testigo: str | None = None
+
+
+class TestimonioCreado(BaseModel):
+    id: str
+    person_id: str | None = None
+    tipo: str
+    estado: str = "pendiente"
+    created_at: datetime
+
+
+class TestimonioPublico(BaseModel):
+    id: str
+    tipo: str
+    archivo_url: str
+    mensaje: str | None = None
+    nombre_testigo: str | None = None
+    created_at: datetime
+
+
+class TestimonioAdmin(BaseModel):
+    id: str
+    person_id: str | None = None
+    tipo: str
+    archivo_url: str
+    mime: str
+    bytes: int
+    mensaje: str | None = None
+    nombre_testigo: str | None = None
+    contacto_testigo: str | None = None
+    estado: str
+    created_at: datetime
+    pub_nombre: str | None = None
+    pub_estado: str | None = None
+    pub_image_url: str | None = None
+
+
 class AdminStats(BaseModel):
     """Conteos reales para el dashboard del superadmin (no dependen de paginación)."""
 
@@ -279,6 +319,9 @@ class AdminStats(BaseModel):
     reportes_publicaciones_pendientes: int = Field(..., description="…de esos, pendientes.")
     reportes_fallas: int = Field(..., description="Reportes de fallas de la página.")
     reportes_fallas_pendientes: int = Field(..., description="…de esos, pendientes.")
+    testimonios_pendientes: int = Field(
+        0, description="Testimonios de reencuentro pendientes de moderar."
+    )
 
 
 class PaginaPersonas(BaseModel):

@@ -31,6 +31,14 @@ from app.database import close_pool, get_pool, init_db
 from app.domain import MatchingPolicy
 from app.domain.persona import Estado, PersonaBase
 from app.personas.repositories.persona import PersonaRepository
+from app.testimonios.repositories.testimonio import TestimonioRepository
+from app.testimonios.use_cases import (
+    EliminarTestimonio,
+    ListarTestimoniosAdmin,
+    ListarTestimoniosPublico,
+    ModerarTestimonio,
+    RegistrarTestimonio,
+)
 from app.personas.use_cases import (
     AgregarHistorial,
     BuscarAdmin,
@@ -68,21 +76,28 @@ from app.schemas import (
     ResultadoBusqueda,
     ResultadoHistorial,
     ResultadoRegistro,
+    TestimonioAdmin,
+    TestimonioCreado,
+    TestimonioPublico,
     HistorialEventoIn,
     FichaPersona,
     TrazaPersona,
 )
 from app.shared._exceptions import (
+    ArchivoInvalidoError,
     ModificacionInvalidaError,
     PersonaNotFoundError,
     PersonaValidationError,
     RostroNoDetectadoError,
+    TestimonioNotFoundError,
+    TestimonioValidationError,
 )
 
 # Module-level policy and repositories (instantiated in lifespan)
 _policy: MatchingPolicy | None = None
 _repo: PersonaRepository | None = None
 _reporte_repo: ReporteRepository | None = None
+_testimonio_repo: TestimonioRepository | None = None
 
 
 def get_policy() -> MatchingPolicy:
@@ -104,6 +119,13 @@ def get_reporte_repo() -> ReporteRepository:
     if _reporte_repo is None:
         raise RuntimeError("Repository not initialized. Call lifespan first.")
     return _reporte_repo
+
+
+def get_testimonio_repo() -> TestimonioRepository:
+    """Get the testimonio repository instance."""
+    if _testimonio_repo is None:
+        raise RuntimeError("Repository not initialized. Call lifespan first.")
+    return _testimonio_repo
 
 
 async def _procesar_fotos(files: list[UploadFile]):
@@ -137,11 +159,17 @@ def _use_case_execute(execute_fn, **kwargs):
         raise HTTPException(404, e.message) from None
     except ModificacionInvalidaError as e:
         raise HTTPException(400, e.message) from None
+    except ArchivoInvalidoError as e:
+        raise HTTPException(422, e.message) from None
+    except TestimonioValidationError as e:
+        raise HTTPException(422, e.message) from None
+    except TestimonioNotFoundError as e:
+        raise HTTPException(404, e.message) from None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _policy, _repo, _reporte_repo
+    global _policy, _repo, _reporte_repo, _testimonio_repo
 
     try:
         init_db()
@@ -160,6 +188,7 @@ async def lifespan(app: FastAPI):
     _policy = MatchingPolicy(threshold=s.match_threshold)
     _repo = PersonaRepository(pool=pool, policy=_policy)
     _reporte_repo = ReporteRepository(pool=pool)
+    _testimonio_repo = TestimonioRepository(pool=pool)
 
     # Seed del primer admin desde env vars (idempotente).
     # Si la tabla `admins` está vacía, crea el admin con admin_user/admin_password.
@@ -209,6 +238,10 @@ tags = [
     {
         "name": "reportes",
         "description": "Reportar fallas de la página o publicaciones inadecuadas.",
+    },
+    {
+        "name": "testimonios",
+        "description": "Subir y ver testimonios de reencuentro (foto/video).",
     },
     {"name": "admin", "description": "Superadmin: buscar, moderar y ver reportes."},
     {"name": "sistema", "description": "Estado del servicio."},
@@ -284,6 +317,27 @@ una **alerta** con el nombre y teléfono del familiar.
 - `POST /reportes/falla` — reportar un bug/falla de la página (JSON: `descripcion`, `url?`, `contacto?`).
 - `POST /reportes/publicacion` — reportar una publicación/foto inadecuada (JSON: `person_id`, `descripcion`, `contacto?`).
 
+### 🎉 TESTIMONIOS (público)
+Cualquier persona puede **subir un testimonio** (foto o video) si encontró a la persona
+que buscaba, para inspirar a otros y cerrar el ciclo.
+
+- `POST /testimonios` — subir un archivo (foto o video) con un mensaje, opcionalmente
+  linkeado a un `person_id`. Si **no** se pasa `person_id`, exige `nombre_testigo` +
+  `contacto_testigo` para que el admin pueda validar. Los testimonios nuevos arrancan
+  en estado `pendiente` hasta que el admin los apruebe.
+- `GET /personas/{person_id}/testimonios` — lista **pública** de testimonios aprobados
+  de una persona (solo los que tienen `estado=aprobada`).
+
+| Campo | Tipo | Obligatorio | Ejemplo |
+|---|---|---|---|
+| `archivo` | archivo | **Sí** | foto.jpg o video.mp4 (≤ 50 MB) |
+| `person_id` | texto | no | `992865da-...` (UUID) |
+| `mensaje` | texto | no | `"¡Gracias! Lo encontramos por esta app."` |
+| `nombre_testigo` | texto | depende | `María Pérez` |
+| `contacto_testigo` | texto | depende | `0412-1234567` |
+
+\\* Si **no** se envía `person_id`, se exigen `nombre_testigo` y `contacto_testigo`.
+
 ### 🛡️ SUPERADMIN
 
 Todos los endpoints de abajo requieren el header **`Authorization: Bearer <token>`**.
@@ -306,6 +360,9 @@ El token se obtiene de `POST /admin/login` (abajo).
 - `DELETE /admin/personas/{person_id}` — borrar.
 - `GET /admin/reportes` — ver reportes recibidos (filtros `tipo`, `estado`).
 - `PATCH /admin/reportes/{id}/estado` — marcar un reporte (pendiente/revisado/resuelto/descartado).
+- `GET /admin/testimonios` — ver testimonios recibidos (filtro `estado`).
+- `PATCH /admin/testimonios/{id}/estado` — aprobar/rechazar testimonio.
+- `DELETE /admin/testimonios/{id}` — eliminar testimonio (borra el archivo).
 
 **Errores comunes en endpoints de admin:**
 
@@ -639,7 +696,9 @@ def admin_stats():
 
     Úsalo en el dashboard en vez de contar el largo de `GET /admin/personas`
     (ese viene topado por `limite`)."""
-    return AdminStats(**get_repo().stats())
+    stats = get_repo().stats()
+    stats["testimonios_pendientes"] = get_testimonio_repo().count_pendientes()
+    return AdminStats(**stats)
 
 
 @app.patch(
@@ -855,5 +914,103 @@ async def importar_encontrado(datos: ImportarEncontradoIn):
         codigo=cod,
     )
     with get_pool().connection() as conn:
-        get_repo().add(persona, [(img, "image/jpeg", embs)])
+        get_repo().add(person_id, persona, [(img, "image/jpeg", embs)])
     return ImportarResultado(estado="creado", person_id=str(person_id), codigo=cod)
+
+
+# ----------------------------- TESTIMONIOS -----------------------------
+
+
+@app.post(
+    "/testimonios",
+    response_model=TestimonioCreado,
+    status_code=201,
+    tags=["testimonios"],
+    summary="Subir un testimonio (foto o video) de reencuentro",
+)
+async def registrar_testimonio(
+    archivo: UploadFile = File(
+        ..., description="Foto (JPEG/PNG/WebP) o video (MP4/WebM). Tope 50 MB."
+    ),
+    person_id: str | None = Form(
+        None, description="ID de la persona encontrada (UUID, opcional)."
+    ),
+    mensaje: str | None = Form(
+        None, max_length=2000, description="Mensaje de cierre / agradecimiento."
+    ),
+    nombre_testigo: str | None = Form(
+        None, max_length=200, description="Nombre de la persona que sube el testimonio."
+    ),
+    contacto_testigo: str | None = Form(
+        None,
+        max_length=200,
+        description="Teléfono/email de contacto para validación.",
+    ),
+):
+    data = await archivo.read()
+    use_case = RegistrarTestimonio(get_testimonio_repo())
+    return _use_case_execute(
+        use_case.execute,
+        archivo_data=data,
+        content_type=(archivo.content_type or "application/octet-stream"),
+        person_id=person_id,
+        mensaje=mensaje,
+        nombre_testigo=nombre_testigo,
+        contacto_testigo=contacto_testigo,
+    )
+
+
+@app.get(
+    "/personas/{person_id}/testimonios",
+    response_model=list[TestimonioPublico],
+    tags=["testimonios"],
+    summary="Lista pública de testimonios aprobados de una persona",
+)
+def listar_testimonios_publico(person_id: str):
+    use_case = ListarTestimoniosPublico(get_testimonio_repo())
+    return _use_case_execute(use_case.execute, person_id=person_id)
+
+
+@app.get(
+    "/admin/testimonios",
+    response_model=list[TestimonioAdmin],
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: listar testimonios recibidos",
+)
+def listar_testimonios_admin(
+    estado: str | None = None,
+    limite: int = 100,
+):
+    """Lista los testimonios recibidos. Filtra por `estado` (`pendiente`, `aprobada`,
+    `rechazada`). Los testimonios linkeados a una publicación traen el contexto
+    (nombre, foto, estado) de esa publicación."""
+    use_case = ListarTestimoniosAdmin(get_testimonio_repo())
+    return _use_case_execute(use_case.execute, estado=estado, limite=limite)
+
+
+@app.patch(
+    "/admin/testimonios/{testimonio_id}/estado",
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Aprobar / rechazar un testimonio",
+)
+def moderar_testimonio(testimonio_id: str, valor: str):
+    """`valor` = `aprobada` | `rechazada` | `pendiente`."""
+    use_case = ModerarTestimonio(get_testimonio_repo())
+    return _use_case_execute(use_case.execute, id=testimonio_id, valor=valor)
+
+
+@app.delete(
+    "/admin/testimonios/{testimonio_id}",
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Eliminar un testimonio (borra el archivo)",
+)
+def eliminar_testimonio(testimonio_id: str):
+    """Borra el testimonio y el archivo subido del almacenamiento."""
+    use_case = EliminarTestimonio(get_testimonio_repo())
+    return _use_case_execute(use_case.execute, id=testimonio_id)
