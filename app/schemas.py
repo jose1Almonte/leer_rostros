@@ -59,6 +59,24 @@ class ResultadoBusqueda(BaseModel):
     meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
 
 
+class ResultadoVerificacion(BaseModel):
+    """Respuesta del flujo INVERSO (RESCATISTA): dada la foto de una persona hallada,
+    los **familiares que la están buscando**, ordenados por parecido facial.
+
+    Es el espejo de `ResultadoBusqueda`: aquí se busca entre las BÚSQUEDAS activas
+    (`buscada`), no entre los encontrados. **No registra nada** — solo consulta.
+    El `telefono` de cada candidato es el **contacto del familiar** para el reencuentro.
+    """
+
+    total: int = Field(..., description="Cantidad de familiares (búsquedas) que coinciden en ESTA página.")
+    buscadores: list[Candidato] = Field(
+        ...,
+        description="Familiares con una búsqueda activa que coincide con esta persona, "
+        "ordenados por parecido (mayor primero). Su `telefono` es el contacto del familiar.",
+    )
+    meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
+
+
 class AlertaFamiliar(BaseModel):
     """Aviso cuando un RESCATISTA registra a alguien que un familiar ya buscaba."""
 

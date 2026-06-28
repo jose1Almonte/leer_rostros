@@ -52,6 +52,7 @@ from app.personas.use_cases import (
     VerFichaPersona,
     VerTrazabilidad,
     VerTrazabilidadPublica,
+    VerificarBuscada,
 )
 from app.reportes.repositories.reporte import ReporteRepository
 from app.reportes.use_cases import (
@@ -77,6 +78,7 @@ from app.schemas import (
     ResultadoBusqueda,
     ResultadoHistorial,
     ResultadoRegistro,
+    ResultadoVerificacion,
     TestimonioAdmin,
     TestimonioCreado,
     TestimonioPublico,
@@ -294,6 +296,11 @@ coincidencias sin traer todo el listado en una sola respuesta. La respuesta incl
 ### 🟢 Flujo RESCATISTA — `POST /encontrados`
 Quien encontró a alguien lo registra. Si un familiar ya lo buscaba, la respuesta trae
 una **alerta** con el nombre y teléfono del familiar.
+
+> **Flujo INVERSO explícito — `POST /encontrados/verificar`:** el espejo de `/buscados`.
+> El rescatista sube una foto y obtiene los **familiares que la están buscando**
+> (ordenados por parecido, con su teléfono), **sin registrar nada**. Sirve para
+> verificar cuantas veces quiera, antes o después de registrar a la persona.
 
 | Campo | Tipo | Obligatorio | Ejemplo |
 |---|---|---|---|
@@ -573,6 +580,41 @@ async def registrar_encontrado(
         doc_responsable=doc_responsable,
         descripcion=descripcion,
         confirmar_duplicado=confirmar_duplicado,
+    )
+
+
+@app.post(
+    "/encontrados/verificar",
+    response_model=ResultadoVerificacion,
+    tags=["rescatista"],
+    summary="Rescatista: ¿alguien está buscando a esta persona? (flujo INVERSO, sin registrar)",
+)
+async def verificar_buscada(
+    files: list[UploadFile] = File(
+        ..., description="Foto(s) del rostro de la persona hallada (obligatorio)."
+    ),
+    limite: int = Form(10, description="Tamaño de página (1-50)."),
+    offset: int = Form(0, description="Desplazamiento para paginar (alternativa a page)."),
+    page: int | None = Form(None, description="Página 1-based (tiene prioridad sobre offset)."),
+):
+    """**Flujo INVERSO del rescatista** — el espejo de `POST /buscados`.
+
+    El rescatista sube la foto de una persona hallada y obtiene la lista de
+    **familiares que la están buscando** (`buscada`), ordenados por **parecido facial**.
+    Cada candidato trae el **teléfono del familiar** para coordinar el reencuentro.
+
+    A diferencia de `POST /encontrados`, **este endpoint NO registra nada**: es solo una
+    consulta para *verificar* si alguien busca a esa persona — útil para revisar antes
+    (o después) de registrarla, cuantas veces haga falta.
+
+    - Mismo modelo facial (ArcFace buffalo_l) y umbral que las demás búsquedas.
+    - Solo familiares **visibles** (moderación aprobada). Menores: nombre protegido.
+    - `422` si no se detecta rostro en la(s) foto(s).
+    """
+    procesadas = await _procesar_fotos(files)
+    use_case = VerificarBuscada(get_repo())
+    return _use_case_execute(
+        use_case.execute, procesadas=procesadas, limite=limite, offset=offset, page=page
     )
 
 
