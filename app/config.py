@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     # porque ambas variantes sirven el sitio y el navegador manda el Origin tal cual).
     # Para agregar un entorno local: CORS_ORIGINS="https://vzlaencuentra.com,http://localhost:5173"
     # Usá "*" para abrir a todos (solo en desarrollo).
-    cors_origins: str = "https://vzlaencuentra.com,https://www.vzlaencuentra.com"
+    cors_origins: str = (
+        "https://vzlaencuentra.com,https://www.vzlaencuentra.com,"
+        "https://admin-personas-private.netlify.app"
+    )
 
     @property
     def cors_origins_list(self) -> list[str]:
