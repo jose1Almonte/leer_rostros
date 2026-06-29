@@ -111,6 +111,7 @@ class FakeReporteRepository:
         tipo: str | None = None,
         estado: str | None = None,
         limite: int = 100,
+        offset: int = 0,
     ) -> list[dict]:
         """Return reports as ReporteAdmin-shaped dicts, filtered + ordered by
         most recent first. Unknown tipo/estado values are ignored (no filter).
@@ -122,9 +123,24 @@ class FakeReporteRepository:
             if estado in VALID_ESTADOS and r["estado"] != estado:
                 continue
             results.append(self._to_admin_dict(r))
-            if len(results) >= limite:
-                break
-        return results
+        off = max(0, offset)
+        return results[off: off + limite]
+
+    def count_admin(
+        self,
+        *,
+        tipo: str | None = None,
+        estado: str | None = None,
+    ) -> int:
+        """Count reports using the same filters as list_admin."""
+        return len(
+            [
+                r
+                for r in self._reportes
+                if (tipo not in VALID_TIPOS or r["tipo"] == tipo)
+                and (estado not in VALID_ESTADOS or r["estado"] == estado)
+            ]
+        )
 
     def set_estado(self, reporte_id: UUID, estado: str) -> int:
         """Update estado for the report with the given id. Returns 1 on hit, 0 on miss."""

@@ -266,6 +266,20 @@ class ReporteAdmin(BaseModel):
     pub_moderacion: str | None = Field(None, description="Estado de moderación actual de la publicación.")
 
 
+class PaginaCandidatos(BaseModel):
+    """Listado paginado de candidatos para busquedas admin: `data` + `meta`."""
+
+    data: list[Candidato]
+    meta: PageMeta
+
+
+class PaginaReportes(BaseModel):
+    """Listado paginado de reportes para el panel de admin: `data` + `meta`."""
+
+    data: list[ReporteAdmin]
+    meta: PageMeta
+
+
 class ImportarEncontradoIn(BaseModel):
     """Un registro de persona ENCONTRADA para carga masiva (formato de importación).
 
@@ -351,6 +365,13 @@ class TestimonioAdmin(BaseModel):
     pub_nombre: str | None = None
     pub_estado: str | None = None
     pub_image_url: str | None = None
+
+
+class PaginaTestimonios(BaseModel):
+    """Listado paginado de testimonios para el panel de admin: `data` + `meta`."""
+
+    data: list[TestimonioAdmin]
+    meta: PageMeta
 
 
 class AdminStats(BaseModel):

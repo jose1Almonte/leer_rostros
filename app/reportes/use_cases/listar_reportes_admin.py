@@ -1,11 +1,12 @@
 """ListarReportesAdmin use case: ADMIN list flow for reports."""
 
 from app.reportes.repositories.reporte import ReporteRepository
-from app.schemas import ReporteAdmin
+from app.schemas import PageMeta, PaginaReportes, ReporteAdmin
+from app.shared._helpers import construir_meta, normaliza_paginacion
 
 
 class ListarReportesAdmin:
-    """ADMIN flow: list received reports (falla + publicacion) with optional filters."""
+    """ADMIN flow: list received reports with optional filters and pagination."""
 
     def __init__(self, repo: ReporteRepository):
         self._repo = repo
@@ -16,18 +17,20 @@ class ListarReportesAdmin:
         tipo: str | None,
         estado: str | None,
         limite: int = 100,
-    ) -> list[ReporteAdmin]:
-        """List reports ordered by most recent first.
-
-        Args:
-            tipo: Optional filter — `'falla'` or `'publicacion'`. Other values are ignored.
-            estado: Optional filter — one of `'pendiente' | 'revisado' | 'resuelto' | 'descartado'`.
-            limite: Maximum reports to return (default 100).
-
-        Returns:
-            List of ReporteAdmin. Publication reports carry `pub_nombre`, `pub_estado`,
-            `pub_image_url`, and `pub_moderacion` (snapshot of the publication at
-            query time).
-        """
-        results = self._repo.list_admin(tipo=tipo, estado=estado, limite=limite)
-        return [ReporteAdmin(**d) for d in results]
+        offset: int = 0,
+        page: int | None = None,
+    ) -> PaginaReportes:
+        """List reports ordered by most recent first."""
+        limite, offset = normaliza_paginacion(limite, offset, page, limite_max=200)
+        results = self._repo.list_admin(
+            tipo=tipo,
+            estado=estado,
+            limite=limite,
+            offset=offset,
+        )
+        total = self._repo.count_admin(tipo=tipo, estado=estado)
+        data = [ReporteAdmin(**d) for d in results]
+        return PaginaReportes(
+            data=data,
+            meta=PageMeta(**construir_meta(total, limite, offset)),
+        )

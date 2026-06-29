@@ -93,7 +93,15 @@ class PersonaRepository:
         JOIN personas p2 ON p2.id = b.foto_id
         WHERE b.rn = 1
         ORDER BY b.distancia ASC
-        LIMIT %s
+        LIMIT %s OFFSET %s
+    """
+
+    _COUNT_SEARCH_ADMIN = """
+        SELECT count(DISTINCT p.person_id)
+        FROM personas p
+        JOIN persona_embeddings pe ON pe.foto_id = p.id
+        WHERE 1 = 1
+            {estado_filter}
     """
 
     # Admin list: aggregation with moderation column
@@ -512,23 +520,72 @@ class PersonaRepository:
             return int(conn.execute(sql, params).fetchone()[0])
 
     def count_admin(
-        self, estado: str | None = None, moderacion: str | None = None
+        self,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        es_menor: bool | None = None,
     ) -> int:
         """Cuenta personas únicas con los mismos filtros que `list_admin` (para meta)."""
-        conds, args = [], []
+        conds, args = self._build_admin_filters(
+            estado=estado,
+            moderacion=moderacion,
+            nombre=nombre,
+            apellido=apellido,
+            cedula=cedula,
+            es_menor=es_menor,
+        )
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        sql = f"SELECT count(DISTINCT person_id) FROM personas {where}"
+        with self._pool.connection() as conn:
+            return int(conn.execute(sql, tuple(args)).fetchone()[0])
+
+    @staticmethod
+    def _build_admin_filters(
+        *,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        es_menor: bool | None = None,
+    ) -> tuple[list[str], list[object]]:
+        """Build shared WHERE filters for admin personas list and count."""
+        conds: list[str] = []
+        args: list[object] = []
         if estado in ("buscada", "encontrada"):
             conds.append("estado = %s")
             args.append(estado)
         if moderacion in ("aprobada", "rechazada", "pendiente"):
             conds.append("moderacion = %s")
             args.append(moderacion)
-        where = ("WHERE " + " AND ".join(conds)) if conds else ""
-        sql = f"SELECT count(DISTINCT person_id) FROM personas {where}"
+        if nombre and nombre.strip():
+            conds.append("nombre ILIKE %s")
+            args.append(f"%{nombre.strip()}%")
+        if apellido and apellido.strip():
+            conds.append("apellido ILIKE %s")
+            args.append(f"%{apellido.strip()}%")
+        if cedula and cedula.strip():
+            conds.append("doc_numero ILIKE %s")
+            args.append(f"%{cedula.strip()}%")
+        if es_menor is not None:
+            conds.append("es_menor = %s")
+            args.append(es_menor)
+        return conds, args
+
+    def count_search_admin(self, estado: str | None = None) -> int:
+        """Count admin-searchable personas with embeddings for pagination metadata."""
+        estado_filter = "AND p.estado = %s" if estado else ""
+        params: tuple = (estado,) if estado_filter else ()
+        sql = self._COUNT_SEARCH_ADMIN.format(estado_filter=estado_filter)
         with self._pool.connection() as conn:
-            return int(conn.execute(sql, tuple(args)).fetchone()[0])
+            row = conn.execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
 
     def search_admin(
-        self, embedding: Any, estado: str | None, limit: int
+        self, embedding: Any, estado: str | None, limit: int, offset: int = 0
     ) -> list[dict]:
         """Admin search: same as search_by_estado but NO moderacion filter.
 
@@ -539,7 +596,7 @@ class PersonaRepository:
         params: tuple = (embedding, embedding)
         if estado:
             params = params + (estado,)
-        params = params + (limit,)
+        params = params + (limit, max(0, offset))
         sql = self._SEARCH_ADMIN.format(cols=cols, estado_filter=estado_filter)
         with self._pool.connection() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -551,19 +608,24 @@ class PersonaRepository:
         estado: str | None = None,
         moderacion: str | None = None,
         offset: int = 0,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        es_menor: bool | None = None,
     ) -> list[dict]:
         """List personas for admin view, with optional estado/moderacion filters.
 
         Soporta paginación con `offset`. Returns list of PersonaAdmin-shaped dicts.
         Does NOT apply privacy masking.
         """
-        conds, args = [], []
-        if estado in ("buscada", "encontrada"):
-            conds.append("estado = %s")
-            args.append(estado)
-        if moderacion in ("aprobada", "rechazada", "pendiente"):
-            conds.append("moderacion = %s")
-            args.append(moderacion)
+        conds, args = self._build_admin_filters(
+            estado=estado,
+            moderacion=moderacion,
+            nombre=nombre,
+            apellido=apellido,
+            cedula=cedula,
+            es_menor=es_menor,
+        )
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         args.append(limit)
         args.append(max(0, offset))

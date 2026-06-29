@@ -40,7 +40,13 @@ class ReporteRepository:
             WHERE person_id = r.person_id ORDER BY created_at LIMIT 1
         ) p ON true
         {where}
-        ORDER BY r.created_at DESC LIMIT %s
+        ORDER BY r.created_at DESC LIMIT %s OFFSET %s
+    """
+
+    _COUNT_ADMIN = """
+        SELECT count(*)
+        FROM reportes r
+        {where}
     """
 
     _UPDATE_ESTADO = """
@@ -106,6 +112,7 @@ class ReporteRepository:
         tipo: str | None = None,
         estado: str | None = None,
         limite: int = 100,
+        offset: int = 0,
     ) -> list[dict]:
         """List reports for admin view, optionally filtered by tipo/estado.
 
@@ -122,10 +129,31 @@ class ReporteRepository:
             args.append(estado)
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         args.append(limite)
+        args.append(max(0, offset))
         sql = self._LIST_ADMIN.format(where=where)
         with self._pool.connection() as conn:
             rows = conn.execute(sql, tuple(args)).fetchall()
         return [self._row_to_admin_dict(r) for r in rows]
+
+    def count_admin(
+        self,
+        *,
+        tipo: str | None = None,
+        estado: str | None = None,
+    ) -> int:
+        """Count reports with the same filters as `list_admin`."""
+        conds, args = [], []
+        if tipo in self._TIPOS:
+            conds.append("r.tipo = %s")
+            args.append(tipo)
+        if estado in self._ESTADOS:
+            conds.append("r.estado = %s")
+            args.append(estado)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        sql = self._COUNT_ADMIN.format(where=where)
+        with self._pool.connection() as conn:
+            row = conn.execute(sql, tuple(args)).fetchone()
+        return int(row[0]) if row else 0
 
     def set_estado(self, reporte_id: UUID, estado: str) -> int:
         """Update `estado` for a single report. Returns rows updated (0 or 1)."""

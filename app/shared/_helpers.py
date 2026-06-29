@@ -25,13 +25,18 @@ def _embedding_consulta(procesadas: ProcessedPhotos) -> Any | None:
     return procesadas[0][2][0][0] if procesadas else None
 
 
-def normaliza_paginacion(limite: int, offset: int = 0, page: int | None = None) -> tuple[int, int]:
+def normaliza_paginacion(
+    limite: int,
+    offset: int = 0,
+    page: int | None = None,
+    limite_max: int = LIMITE_MAX,
+) -> tuple[int, int]:
     """Normaliza parámetros de paginación.
 
     Acepta `offset` directo o `page` (1-based, tiene prioridad si se envía).
-    `limite` se acota a 1..LIMITE_MAX. Devuelve (limite, offset) saneados.
+    `limite` se acota a 1..limite_max. Devuelve (limite, offset) saneados.
     """
-    limite = max(1, min(LIMITE_MAX, limite))
+    limite = max(1, min(limite_max, limite))
     if page is not None and page >= 1:
         offset = (page - 1) * limite
     return limite, max(0, offset)

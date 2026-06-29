@@ -249,31 +249,85 @@ class FakePersonaRepository:
             if p.moderacion == "aprobada" and (estado is None or p.estado.value == estado)
         })
 
-    def count_admin(self, estado: str | None = None, moderacion: str | None = None) -> int:
+    def count_admin(
+        self,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        es_menor: bool | None = None,
+    ) -> int:
         return len({
             str(p.person_id)
             for p in self._personas
-            if (not estado or p.estado.value == estado)
-            and (not moderacion or p.moderacion == moderacion)
+            if self._matches_admin_filters(
+                p,
+                estado=estado,
+                moderacion=moderacion,
+                nombre=nombre,
+                apellido=apellido,
+                cedula=cedula,
+                es_menor=es_menor,
+            )
         })
+
+    @staticmethod
+    def _contains(value: str | None, needle: str | None) -> bool:
+        return not needle or needle.strip().lower() in (value or "").lower()
+
+    def _matches_admin_filters(
+        self,
+        persona: PersonaBase,
+        *,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        es_menor: bool | None = None,
+    ) -> bool:
+        if estado and persona.estado.value != estado:
+            return False
+        if moderacion and persona.moderacion != moderacion:
+            return False
+        if not self._contains(persona.nombre, nombre):
+            return False
+        if not self._contains(persona.apellido, apellido):
+            return False
+        if not self._contains(persona.doc_numero, cedula):
+            return False
+        if es_menor is not None and persona.es_menor is not es_menor:
+            return False
+        return True
 
     def get_busqueda_embedding(self, codigo: str) -> Any | None:
         """Return first stored fake embedding for a search code."""
         embeddings = self._embeddings.get(codigo)
         return embeddings[0] if embeddings else None
 
+    def count_search_admin(self, estado: str | None = None) -> int:
+        return len(
+            {
+                str(p.person_id)
+                for p in self._personas
+                if estado is None or p.estado.value == estado
+            }
+        )
+
     def search_admin(
-        self, embedding: Any, estado: str | None, limit: int
+        self, embedding: Any, estado: str | None, limit: int, offset: int = 0
     ) -> list[dict]:
         """Same as search_by_estado but no moderacion filter."""
         candidates = [
             p for p in self._personas if estado is None or p.estado.value == estado
         ]
         results = []
-        for i, persona in enumerate(candidates[:limit]):
+        for i, persona in enumerate(candidates):
             distancia = round(0.10 * (i + 1), 4)
             results.append(self._to_candidato_dict(persona, distancia))
-        return results
+        off = max(0, offset)
+        return results[off: off + limit]
 
     def list_admin(
         self,
@@ -281,13 +335,23 @@ class FakePersonaRepository:
         estado: str | None = None,
         moderacion: str | None = None,
         offset: int = 0,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        es_menor: bool | None = None,
     ) -> list[dict]:
         """Return stored personas as PersonaAdmin-shaped dicts (paginado con offset)."""
         filtered = []
         for persona in self._personas:
-            if estado and persona.estado.value != estado:
-                continue
-            if moderacion and persona.moderacion != moderacion:
+            if not self._matches_admin_filters(
+                persona,
+                estado=estado,
+                moderacion=moderacion,
+                nombre=nombre,
+                apellido=apellido,
+                cedula=cedula,
+                es_menor=es_menor,
+            ):
                 continue
             filtered.append(self._to_admin_dict(persona))
         return filtered[max(0, offset): max(0, offset) + limit]
