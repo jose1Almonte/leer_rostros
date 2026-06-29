@@ -21,7 +21,7 @@
 
 ## Configuración
 
-1.  Cloná el repositorio:
+1.  Clona el repositorio:
 
     ```bash
     git clone https://github.com/jose1Almonte/leer_rostros.git
@@ -53,13 +53,13 @@
     JWT_SECRET=poner_un_secreto_seguro_aqui
     ```
 
-3.  Levantá todo:
+3.  Levanta todo:
 
     ```bash
     docker compose up -d --build
     ```
 
-4.  Abrí [http://localhost](http://localhost).
+4.  Abre [http://localhost](http://localhost).
 
 ## Uso
 
