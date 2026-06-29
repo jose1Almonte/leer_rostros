@@ -20,14 +20,34 @@ class ListarPersonasAdmin:
         moderacion: str | None,
         offset: int = 0,
         page: int | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        es_menor: bool | None = None,
     ) -> PaginaPersonas:
         """List personas for admin view (paginado: limit + offset/page).
 
         Returns:
             PaginaPersonas con `data` (PersonaAdmin con privacy aplicada) y `meta`.
         """
-        limite, offset = normaliza_paginacion(limite, offset, page)
-        results = self._repo.list_admin(limite, estado, moderacion, offset=offset)
-        total = self._repo.count_admin(estado, moderacion)
+        limite, offset = normaliza_paginacion(limite, offset, page, limite_max=200)
+        results = self._repo.list_admin(
+            limite,
+            estado,
+            moderacion,
+            offset=offset,
+            nombre=nombre,
+            apellido=apellido,
+            cedula=cedula,
+            es_menor=es_menor,
+        )
+        total = self._repo.count_admin(
+            estado,
+            moderacion,
+            nombre=nombre,
+            apellido=apellido,
+            cedula=cedula,
+            es_menor=es_menor,
+        )
         data = [MenoresPrivacy(PersonaAdmin(**d)) for d in results]
         return PaginaPersonas(data=data, meta=PageMeta(**construir_meta(total, limite, offset)))

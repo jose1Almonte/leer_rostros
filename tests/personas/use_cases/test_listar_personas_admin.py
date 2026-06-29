@@ -112,6 +112,59 @@ class TestListarPersonasAdminHappyPath:
         assert len(res.data) == 1
         assert res.data[0].moderacion == "aprobada"
 
+    def test_filters_by_nombre_apellido_cedula_and_es_menor(self, use_case, fake_repo):
+        target = PersonaBase(
+            person_id=uuid4(),
+            estado=Estado.ENCONTRADA,
+            es_menor=True,
+            nombre="Ana",
+            apellido="Gomez",
+            doc_numero="12345678",
+            moderacion="aprobada",
+            codigo="REE-00000001",
+            photos=["https://x/ana.jpg"],
+        )
+        other = PersonaBase(
+            person_id=uuid4(),
+            estado=Estado.ENCONTRADA,
+            es_menor=False,
+            nombre="Luis",
+            apellido="Perez",
+            doc_numero="87654321",
+            moderacion="aprobada",
+            codigo="REE-00000002",
+            photos=["https://x/luis.jpg"],
+        )
+        fake_repo._personas.extend([target, other])
+
+        res = use_case.execute(
+            limite=10,
+            estado=None,
+            moderacion=None,
+            nombre="an",
+            apellido="gom",
+            cedula="345",
+            es_menor=True,
+        )
+
+        assert len(res.data) == 1
+        assert res.data[0].nombre == "Ana"
+        assert res.meta.total_records == 1
+
+    def test_filters_by_es_menor_false(self, use_case, fake_repo):
+        _seed(fake_repo, 1, menor=True)
+        _seed(fake_repo, 1, menor=False)
+
+        res = use_case.execute(
+            limite=10,
+            estado=None,
+            moderacion=None,
+            es_menor=False,
+        )
+
+        assert len(res.data) == 1
+        assert res.data[0].es_menor is False
+
     def test_applies_menores_privacy(self, use_case, fake_repo):
         """Menores: nombre se conserva (ya no se enmascara en admin)."""
         minor = PersonaBase(

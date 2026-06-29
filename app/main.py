@@ -65,8 +65,11 @@ from app.schemas import (
     Candidato,
     LoginBody,
     LoginResp,
+    PaginaCandidatos,
     PaginaPersonas,
     PaginaPublica,
+    PaginaReportes,
+    PaginaTestimonios,
     ImportarEncontradoIn,
     ImportarResultado,
     PersonaAdmin,
@@ -351,18 +354,23 @@ El token se obtiene de `POST /admin/login` (abajo).
   vez, el admin se siembra automáticamente desde `ADMIN_USER` / `ADMIN_PASSWORD` del
   `.env` si la tabla está vacía. Cambiá la password con
   `python -m app.cli change-password <usuario>`.
-- `POST /buscar` — comparar una foto contra TODA la base (campos `file`, `limite`, `estado`).
+- `POST /buscar` — comparar una foto contra TODA la base (campos `file`, `limite`,
+  `offset`/`page`, `paginado`, `estado`). Con `paginado=true` devuelve `{data, meta}`.
 - `GET /admin/stats` — **conteos reales** para el dashboard (total, buscadas, encontradas,
   menores, ocultas, pendientes, reportes). Usalo para los totales; NO cuentes el largo de
   `/admin/personas` (viene topado por `limite`).
 - `GET /admin/personas` — listar registros **paginados**. Query: `limite`, `offset` o
-  `page`, `estado`, `moderacion`. Devuelve **`{data:[...], meta:{total_records, current_page,
-  total_pages, limit, offset}}`**. Recorrer todo: `limite=100&page=1`, `page=2`, …
+  `page`, `per_page`, `estado`/`status`, `moderacion`, `nombre`, `apellido`,
+  `cedula`/`doc_numero`, `es_menor`. Con `paginado=true` devuelve
+  **`{data:[...], meta:{total_records, current_page, total_pages, limit, offset}}`**.
+  Recorrer todo: `limite=100&page=1`, `page=2`, …
 - `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
 - `DELETE /admin/personas/{person_id}` — borrar.
-- `GET /admin/reportes` — ver reportes recibidos (filtros `tipo`, `estado`).
+- `GET /admin/reportes` — ver reportes recibidos (filtros `tipo`, `estado`; paginacion
+  con `limite`, `offset`/`page`, `paginado=true` para `{data, meta}`).
 - `PATCH /admin/reportes/{id}/estado` — marcar un reporte (pendiente/revisado/resuelto/descartado).
-- `GET /admin/testimonios` — ver testimonios recibidos (filtro `estado`).
+- `GET /admin/testimonios` — ver testimonios recibidos (filtro `estado`; paginacion
+  con `limite`, `offset`/`page`, `paginado=true` para `{data, meta}`).
 - `PATCH /admin/testimonios/{id}/estado` — aprobar/rechazar testimonio.
 - `DELETE /admin/testimonios/{id}` — eliminar testimonio (borra el archivo).
 
@@ -657,7 +665,7 @@ def listar_encontrados_publico(
 
 @app.post(
     "/buscar",
-    response_model=list[Candidato],
+    response_model=PaginaCandidatos | list[Candidato],
     tags=["admin"],
     dependencies=[Depends(get_current_admin)],
     responses=_ADMIN_RESPONSES,
@@ -669,6 +677,13 @@ async def buscar_admin(
     estado: str | None = Form(
         None, description="Filtrar por 'buscada' o 'encontrada' (vacío = todas)."
     ),
+    offset: int = Form(0, description="Cantidad de resultados a omitir."),
+    page: int | None = Form(
+        None, description="Pagina 1-based. Si se envia, tiene prioridad sobre offset."
+    ),
+    paginado: bool = Form(
+        False, description="Si es true devuelve {data, meta}; si no, array legacy."
+    ),
 ):
     data = await file.read()
     try:
@@ -676,9 +691,15 @@ async def buscar_admin(
     except ValueError as e:
         raise HTTPException(422, str(e)) from None
     use_case = BuscarAdmin(get_repo())
-    return _use_case_execute(
-        use_case.execute, embedding=embedding, estado=estado, limite=limite
+    pagina = _use_case_execute(
+        use_case.execute,
+        embedding=embedding,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
     )
+    return pagina if paginado else pagina.data
 
 
 @app.get(
@@ -691,13 +712,21 @@ async def buscar_admin(
 )
 def listar(
     limite: int = 100,
+    per_page: int | None = Query(None, description="Alias de limite."),
     estado: str | None = None,
+    status: str | None = Query(None, description="Alias de estado."),
     moderacion: str | None = None,
+    nombre: str | None = None,
+    apellido: str | None = None,
+    cedula: str | None = None,
+    doc_numero: str | None = Query(None, description="Alias de cedula."),
+    es_menor: bool | None = None,
     offset: int = 0,
     page: int | None = None,
     paginado: bool = False,
 ):
-    """Lista registros. Filtra por `estado` y/o `moderacion`; pagina con `limite` +
+    """Lista registros. Filtra por `estado`/`status`, `moderacion`, `nombre`,
+    `apellido`, `cedula`/`doc_numero` y `es_menor`; pagina con `limite`/`per_page` +
     `offset` (ej. `limite=100&offset=100`) o `page` (1-based).
 
     **Compatibilidad:** por defecto devuelve un **array** de registros (la página actual).
@@ -705,13 +734,20 @@ def listar(
     current_page, total_pages, limit, offset}}`** (usá esto para mostrar total de páginas;
     o `GET /admin/stats` para el total real)."""
     use_case = ListarPersonasAdmin(get_repo())
+    limite_final = per_page if per_page is not None else limite
+    estado_final = estado if estado is not None else status
+    cedula_final = cedula if cedula is not None else doc_numero
     pagina = _use_case_execute(
         use_case.execute,
-        limite=limite,
-        estado=estado,
+        limite=limite_final,
+        estado=estado_final,
         moderacion=moderacion,
         offset=offset,
         page=page,
+        nombre=nombre,
+        apellido=apellido,
+        cedula=cedula_final,
+        es_menor=es_menor,
     )
     return pagina if paginado else pagina.data
 
@@ -831,7 +867,7 @@ def reportar_publicacion(datos: ReportePublicacionIn):
 
 @app.get(
     "/admin/reportes",
-    response_model=list[ReporteAdmin],
+    response_model=PaginaReportes | list[ReporteAdmin],
     tags=["admin"],
     dependencies=[Depends(get_current_admin)],
     responses=_ADMIN_RESPONSES,
@@ -841,14 +877,23 @@ def listar_reportes(
     tipo: str | None = None,
     estado: str | None = None,
     limite: int = 100,
+    offset: int = 0,
+    page: int | None = None,
+    paginado: bool = False,
 ):
     """Lista los reportes recibidos, del más reciente al más antiguo. Filtra por
     `tipo` ('falla' | 'publicacion') y/o `estado`. Los de publicación traen el
     contexto de la publicación reportada (nombre, foto, estado de moderación)."""
     use_case = ListarReportesAdmin(get_reporte_repo())
-    return _use_case_execute(
-        use_case.execute, tipo=tipo, estado=estado, limite=limite
+    pagina = _use_case_execute(
+        use_case.execute,
+        tipo=tipo,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
     )
+    return pagina if paginado else pagina.data
 
 
 @app.patch(
@@ -1010,7 +1055,7 @@ def listar_testimonios_publico(person_id: str):
 
 @app.get(
     "/admin/testimonios",
-    response_model=list[TestimonioAdmin],
+    response_model=PaginaTestimonios | list[TestimonioAdmin],
     tags=["admin"],
     dependencies=[Depends(get_current_admin)],
     responses=_ADMIN_RESPONSES,
@@ -1019,12 +1064,22 @@ def listar_testimonios_publico(person_id: str):
 def listar_testimonios_admin(
     estado: str | None = None,
     limite: int = 100,
+    offset: int = 0,
+    page: int | None = None,
+    paginado: bool = False,
 ):
     """Lista los testimonios recibidos. Filtra por `estado` (`pendiente`, `aprobada`,
     `rechazada`). Los testimonios linkeados a una publicación traen el contexto
     (nombre, foto, estado) de esa publicación."""
     use_case = ListarTestimoniosAdmin(get_testimonio_repo())
-    return _use_case_execute(use_case.execute, estado=estado, limite=limite)
+    pagina = _use_case_execute(
+        use_case.execute,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
+    return pagina if paginado else pagina.data
 
 
 @app.patch(
