@@ -42,6 +42,9 @@ _EXTRA_COLS = [
     ("encontrado_por", "TEXT"),  # nombre de quien encontró a la persona
     # Moderación: 'aprobada' (visible) | 'rechazada' (oculta) | 'pendiente'.
     ("moderacion", "TEXT NOT NULL DEFAULT 'aprobada'"),
+    # Lote de origen de una carga masiva (para identificar/limpiar después un set de datos).
+    # Ej.: 'valid_personas_json' marca los registros importados desde ese JSON.
+    ("lote_origen", "TEXT"),
 ]
 
 
