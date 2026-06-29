@@ -16,7 +16,10 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
-RUN mkdir -p /weights
+RUN mkdir -p /weights /data/fotos && \
+    useradd -r -s /bin/false -u 1001 appuser && \
+    chown -R appuser:appuser /code /weights /data
+USER appuser
 
 EXPOSE 8000
 # root-path /api: el nginx del compose proxya /api/ -> aquí.
