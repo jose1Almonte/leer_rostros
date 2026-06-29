@@ -165,6 +165,42 @@ class TestListarPersonasAdminHappyPath:
         assert len(res.data) == 1
         assert res.data[0].es_menor is False
 
+    def test_filters_by_person_id(self, use_case, fake_repo):
+        target_id = uuid4()
+        fake_repo._personas.extend(
+            [
+                PersonaBase(
+                    person_id=target_id,
+                    estado=Estado.ENCONTRADA,
+                    es_menor=False,
+                    nombre="Ana",
+                    apellido="Gomez",
+                    moderacion="aprobada",
+                    photos=["https://x/ana.jpg"],
+                ),
+                PersonaBase(
+                    person_id=uuid4(),
+                    estado=Estado.ENCONTRADA,
+                    es_menor=False,
+                    nombre="Luis",
+                    apellido="Perez",
+                    moderacion="aprobada",
+                    photos=["https://x/luis.jpg"],
+                ),
+            ]
+        )
+
+        res = use_case.execute(
+            limite=10,
+            estado=None,
+            moderacion=None,
+            person_id=str(target_id),
+        )
+
+        assert len(res.data) == 1
+        assert res.data[0].person_id == str(target_id)
+        assert res.meta.total_records == 1
+
     def test_applies_menores_privacy(self, use_case, fake_repo):
         """Menores: nombre se conserva (ya no se enmascara en admin)."""
         minor = PersonaBase(

@@ -526,6 +526,7 @@ class PersonaRepository:
         nombre: str | None = None,
         apellido: str | None = None,
         cedula: str | None = None,
+        person_id: str | None = None,
         es_menor: bool | None = None,
     ) -> int:
         """Cuenta personas únicas con los mismos filtros que `list_admin` (para meta)."""
@@ -535,6 +536,7 @@ class PersonaRepository:
             nombre=nombre,
             apellido=apellido,
             cedula=cedula,
+            person_id=person_id,
             es_menor=es_menor,
         )
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
@@ -550,6 +552,7 @@ class PersonaRepository:
         nombre: str | None = None,
         apellido: str | None = None,
         cedula: str | None = None,
+        person_id: str | None = None,
         es_menor: bool | None = None,
     ) -> tuple[list[str], list[object]]:
         """Build shared WHERE filters for admin personas list and count."""
@@ -570,6 +573,9 @@ class PersonaRepository:
         if cedula and cedula.strip():
             conds.append("doc_numero ILIKE %s")
             args.append(f"%{cedula.strip()}%")
+        if person_id and person_id.strip():
+            conds.append("person_id::text = %s")
+            args.append(person_id.strip())
         if es_menor is not None:
             conds.append("es_menor = %s")
             args.append(es_menor)
@@ -611,6 +617,7 @@ class PersonaRepository:
         nombre: str | None = None,
         apellido: str | None = None,
         cedula: str | None = None,
+        person_id: str | None = None,
         es_menor: bool | None = None,
     ) -> list[dict]:
         """List personas for admin view, with optional estado/moderacion filters.
@@ -624,6 +631,7 @@ class PersonaRepository:
             nombre=nombre,
             apellido=apellido,
             cedula=cedula,
+            person_id=person_id,
             es_menor=es_menor,
         )
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
