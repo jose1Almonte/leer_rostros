@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any
 
-import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -99,6 +98,7 @@ from app.shared._exceptions import (
     TestimonioNotFoundError,
     TestimonioValidationError,
 )
+from app.shared._net import descargar_imagen_segura
 
 # Module-level policy and repositories (instantiated in lifespan)
 _policy: MatchingPolicy | None = None
@@ -475,13 +475,13 @@ async def registrar_busqueda(
     files: list[UploadFile] = File(
         ..., description="Foto(s) del rostro de la persona buscada (obligatorio)."
     ),
-    nombre: str | None = Form(None),
-    apellido: str | None = Form(None),
-    edad: str | None = Form(None),
-    doc_tipo: str | None = Form(None),
-    doc_numero: str | None = Form(None),
+    nombre: str | None = Form(None, max_length=120),
+    apellido: str | None = Form(None, max_length=120),
+    edad: str | None = Form(None, max_length=20),
+    doc_tipo: str | None = Form(None, max_length=40),
+    doc_numero: str | None = Form(None, max_length=40),
     telefono_contacto: str | None = Form(
-        None, description="Teléfono del familiar para el reencuentro."
+        None, max_length=120, description="Teléfono del familiar para el reencuentro."
     ),
     limite: int = Form(
         10, description="Tamaño de página (1-50). Cuántas coincidencias por página."
@@ -557,22 +557,22 @@ async def registrar_encontrado(
     es_menor: bool = Form(
         False, description="Marcar si es menor (etiqueta; el nombre SÍ se guarda/muestra)."
     ),
-    nombre: str | None = Form(None, description="Nombre del encontrado (null si no se conoce)."),
-    apellido: str | None = Form(None, description="Apellido del encontrado (null si no se conoce)."),
-    doc_tipo: str | None = Form(None),
-    doc_numero: str | None = Form(None),
-    refugio: str | None = Form(None, description="Refugio donde se encuentra."),
-    ubicacion: str | None = Form(None, description="Dónde se encontró a la persona."),
+    nombre: str | None = Form(None, max_length=120, description="Nombre del encontrado (null si no se conoce)."),
+    apellido: str | None = Form(None, max_length=120, description="Apellido del encontrado (null si no se conoce)."),
+    doc_tipo: str | None = Form(None, max_length=40),
+    doc_numero: str | None = Form(None, max_length=40),
+    refugio: str | None = Form(None, max_length=300, description="Refugio donde se encuentra."),
+    ubicacion: str | None = Form(None, max_length=300, description="Dónde se encontró a la persona."),
     encontrado_por: str | None = Form(
-        None, description="Nombre de quien encontró a la persona (se muestra al familiar)."
+        None, max_length=160, description="Nombre de quien encontró a la persona (se muestra al familiar)."
     ),
     telefono_responsable: str | None = Form(
-        None, description="Teléfono de quien lo encontró / responsable."
+        None, max_length=120, description="Teléfono de quien lo encontró / responsable."
     ),
     doc_responsable: str | None = Form(
-        None, description="Identificación del responsable."
+        None, max_length=60, description="Identificación del responsable."
     ),
-    descripcion: str | None = Form(None, description="Descripción física básica."),
+    descripcion: str | None = Form(None, max_length=2000, description="Descripción física básica."),
     confirmar_duplicado: bool = Form(
         False,
         description="Si la cédula ya existe entre los encontrados, en false solo avisa "
@@ -1081,12 +1081,12 @@ def cambiar_estado_reporte(reporte_id: str, valor: str):
 
 
 def _descargar_imagen(url: str) -> bytes:
-    """Descarga una imagen desde una URL pública (para la carga masiva)."""
-    r = requests.get(url, timeout=25, headers={"User-Agent": "reencuentros-importer"})
-    r.raise_for_status()
-    if not r.content:
-        raise ValueError("La URL no devolvió contenido.")
-    return r.content
+    """Descarga una imagen desde una URL pública (para la carga masiva).
+
+    Protegido contra SSRF: rechaza URLs que apunten a IPs internas/metadata y
+    revalida en cada redirección. Ver `app.shared._net`.
+    """
+    return descargar_imagen_segura(url)
 
 
 @app.post(
