@@ -100,12 +100,23 @@ def init_db() -> None:
         conn.execute("ALTER TABLE personas DROP COLUMN IF EXISTS embedding")
 
         # --- Tabla de embeddings: N vectores por foto (base + rotaciones ±15°). ---
+        # Migración: si la tabla ya existe pero con dimensión distinta, la recreamos.
+        _embedding_col_type = f"vector({s.embedding_dim})"
+        _row = conn.execute(
+            "SELECT column_name, udt_name, character_maximum_length "
+            "FROM information_schema.columns "
+            "WHERE table_name='persona_embeddings' AND column_name='embedding'"
+        ).fetchone()
+        if _row is not None:
+            _current_dim = _row[2]
+            if _current_dim != s.embedding_dim:
+                conn.execute("DROP TABLE IF EXISTS persona_embeddings CASCADE")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS persona_embeddings (
                 id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 foto_id        UUID NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
-                embedding      vector({s.embedding_dim}) NOT NULL,
+                embedding      {_embedding_col_type} NOT NULL,
                 calidad_rostro FLOAT NOT NULL DEFAULT 1.0,
                 created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
             )
