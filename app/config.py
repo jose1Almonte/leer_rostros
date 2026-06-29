@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     # `admins` desde env vars (ver main.lifespan). El login real valida SIEMPRE contra
     # la BD con hash bcrypt. Cambiá la password con `python -m app.cli change-password`.
     admin_user: str = "admin"
-    admin_password: str = "reencuentros2026"
+    admin_password: str = ""
 
     # JWT firmado para los endpoints de admin.
     # >>> JWT_SECRET DEBE estar setteado en producción (generá uno con

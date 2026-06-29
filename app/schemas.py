@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class LoginBody(BaseModel):
     usuario: str = Field("admin", examples=["admin"])
-    password: str = Field(..., examples=["reencuentros2026"])
+    password: str = Field(..., examples=["mi_contraseña_segura"])
 
 
 class LoginResp(BaseModel):
