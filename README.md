@@ -46,7 +46,7 @@
 
     # --- Admin (solo para seed inicial) ---
     ADMIN_USER=admin
-    ADMIN_PASSWORD=reencuentros2026
+    ADMIN_PASSWORD=
 
     # --- JWT (OBLIGATORIO en producción) ---
     # Generá uno con: python -c "import secrets; print(secrets.token_urlsafe(64))"
