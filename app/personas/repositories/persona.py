@@ -23,13 +23,6 @@ def _cols_with_alias(alias: str) -> str:
     return ", ".join(f"{alias}.{c.strip()}" for c in cols.split(","))
 
 
-def _normaliza_uuid_text(value: str) -> str | None:
-    try:
-        return str(UUID(value.strip()))
-    except (ValueError, AttributeError):
-        return None
-
-
 class PersonaRepository:
     """All SQL for the personas and persona_embeddings tables.
     No raw SQL for these tables remains in app/main.py.
@@ -581,12 +574,8 @@ class PersonaRepository:
             conds.append("doc_numero ILIKE %s")
             args.append(f"%{cedula.strip()}%")
         if person_id and person_id.strip():
-            normalized_person_id = _normaliza_uuid_text(person_id)
-            if normalized_person_id is None:
-                conds.append("FALSE")
-            else:
-                conds.append("person_id = %s")
-                args.append(normalized_person_id)
+            conds.append("person_id::text = %s")
+            args.append(person_id.strip())
         if es_menor is not None:
             conds.append("es_menor = %s")
             args.append(es_menor)

@@ -37,14 +37,6 @@ class FakePersonaRepository:
         self._historial: list[dict] = []  # eventos de trazabilidad
         self._seq: int = 0  # contador determinista para ids/timestamps de eventos
 
-    def _normaliza_uuid_text(self, value: str | None) -> str | None:
-        if not value:
-            return None
-        try:
-            return str(UUID(value.strip()))
-        except ValueError:
-            return None
-
     def add(
         self,
         person_id: UUID,
@@ -308,10 +300,7 @@ class FakePersonaRepository:
             return False
         if not self._contains(persona.doc_numero, cedula):
             return False
-        normalized_person_id = self._normaliza_uuid_text(person_id)
-        if normalized_person_id is None and person_id:
-            return False
-        if normalized_person_id is not None and str(persona.person_id) != normalized_person_id:
+        if person_id and str(persona.person_id) != person_id.strip():
             return False
         if es_menor is not None and persona.es_menor is not es_menor:
             return False
