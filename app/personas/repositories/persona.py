@@ -319,6 +319,7 @@ class PersonaRepository:
         params = params + (limit, max(0, offset))
         sql = self._SEARCH.format(cols=cols, estado_filter=estado_filter)
         with self._pool.connection() as conn:
+            conn.execute("SET LOCAL hnsw.ef_search = 100")
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_candidato_dict(r) for r in rows]
 
@@ -542,6 +543,7 @@ class PersonaRepository:
         params = params + (limit,)
         sql = self._SEARCH_ADMIN.format(cols=cols, estado_filter=estado_filter)
         with self._pool.connection() as conn:
+            conn.execute("SET LOCAL hnsw.ef_search = 100")
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_candidato_dict(r) for r in rows]
 

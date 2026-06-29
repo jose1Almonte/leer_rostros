@@ -115,10 +115,13 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS persona_embeddings_foto_idx "
             "ON persona_embeddings (foto_id)"
         )
-        # HNSW para búsqueda por distancia coseno rápida a escala (sin entrenamiento previo).
+        # HNSW para búsqueda por distancia coseno rápida a escala.
+        # m=32, ef_construction=128: calibrados para 512-dim coseno (10K–500K vectores).
+        conn.execute("DROP INDEX IF EXISTS persona_embeddings_hnsw")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS persona_embeddings_hnsw "
-            "ON persona_embeddings USING hnsw (embedding vector_cosine_ops)"
+            "ON persona_embeddings USING hnsw (embedding vector_cosine_ops) "
+            "WITH (m = 32, ef_construction = 128)"
         )
 
         # --- Reportes de usuarios: fallas de la página y publicaciones/fotos inadecuadas. ---
