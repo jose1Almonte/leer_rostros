@@ -151,11 +151,11 @@ class EventoHistorial(BaseModel):
 class HistorialEventoIn(BaseModel):
     """Nuevo avistamiento para el histórico de una persona ya registrada."""
 
-    refugio: str | None = Field(None, description="Refugio donde está ahora.", examples=["Refugio Sur, Valencia"])
-    ubicacion: str | None = Field(None, description="Dónde se la vio/encontró.", examples=["Av. Bolívar, frente a la plaza"])
-    encontrado_por: str | None = Field(None, description="Quién la reporta ahora.", examples=["José (rescatista)"])
-    telefono_responsable: str | None = Field(None, description="Teléfono de contacto del responsable.")
-    nota: str | None = Field(None, description="Nota libre del evento.", examples=["La trasladaron a otro refugio."])
+    refugio: str | None = Field(None, max_length=300, description="Refugio donde está ahora.", examples=["Refugio Sur, Valencia"])
+    ubicacion: str | None = Field(None, max_length=300, description="Dónde se la vio/encontró.", examples=["Av. Bolívar, frente a la plaza"])
+    encontrado_por: str | None = Field(None, max_length=160, description="Quién la reporta ahora.", examples=["José (rescatista)"])
+    telefono_responsable: str | None = Field(None, max_length=120, description="Teléfono de contacto del responsable.")
+    nota: str | None = Field(None, max_length=2000, description="Nota libre del evento.", examples=["La trasladaron a otro refugio."])
 
 
 class ResultadoHistorial(BaseModel):
@@ -222,21 +222,21 @@ class FichaPersona(BaseModel):
 class ReporteFallaIn(BaseModel):
     """Reporte de una falla/bug de la página."""
 
-    descripcion: str = Field(..., min_length=3, description="Descripción de la falla encontrada.",
+    descripcion: str = Field(..., min_length=3, max_length=2000, description="Descripción de la falla encontrada.",
                              examples=["Al subir una foto el botón se queda cargando y no pasa nada."])
-    url: str | None = Field(None, description="Página/URL donde ocurrió (opcional).",
+    url: str | None = Field(None, max_length=2048, description="Página/URL donde ocurrió (opcional).",
                             examples=["https://symtechven.com/"])
-    contacto: str | None = Field(None, description="Tu email o teléfono para seguimiento (opcional).")
+    contacto: str | None = Field(None, max_length=200, description="Tu email o teléfono para seguimiento (opcional).")
 
 
 class ReportePublicacionIn(BaseModel):
     """Reporte de una publicación o foto inadecuada."""
 
-    person_id: str = Field(..., description="ID de la publicación reportada (el person_id del candidato).",
+    person_id: str = Field(..., max_length=64, description="ID de la publicación reportada (el person_id del candidato).",
                            examples=["992865da-fcc6-4bb2-9db3-3d4af38269ff"])
-    descripcion: str = Field(..., min_length=3, description="Motivo del reporte (por qué es inadecuada).",
+    descripcion: str = Field(..., min_length=3, max_length=2000, description="Motivo del reporte (por qué es inadecuada).",
                              examples=["La foto no corresponde a una persona / contenido ofensivo."])
-    contacto: str | None = Field(None, description="Tu contacto para seguimiento (opcional).")
+    contacto: str | None = Field(None, max_length=200, description="Tu contacto para seguimiento (opcional).")
 
 
 class ReporteCreado(BaseModel):
@@ -286,17 +286,17 @@ class ImportarEncontradoIn(BaseModel):
     La foto se toma de `foto_url` (el server la descarga). Pensado para importar data
     pública existente. Idempotente por `id_externo` (re-importar no duplica)."""
 
-    foto_url: str = Field(..., description="URL pública de la foto del rostro.",
+    foto_url: str = Field(..., max_length=2048, description="URL pública de la foto del rostro.",
                           examples=["https://terremotovenezuela.app/api/missing/xxxx/photo"])
-    nombre: str | None = Field(None, examples=["Ricardo"])
-    apellido: str | None = Field(None, examples=["Anselmi"])
-    cedula: str | None = Field(None, description="Documento (puede ir vacío).")
-    edad: str | None = Field(None, examples=["53"])
-    ultima_ubicacion: str | None = Field(None, examples=["Los corales"])
-    reportante_phone: str | None = Field(None, description="Contacto de quien reporta (tel/email/texto).")
-    reportante_name: str | None = None
-    fuente: str | None = Field(None, description="Origen del dato (URL/fuente).")
-    id_externo: str | None = Field(None, description="ID en el sistema origen; da idempotencia al import.")
+    nombre: str | None = Field(None, max_length=120, examples=["Ricardo"])
+    apellido: str | None = Field(None, max_length=120, examples=["Anselmi"])
+    cedula: str | None = Field(None, max_length=40, description="Documento (puede ir vacío).")
+    edad: str | None = Field(None, max_length=20, examples=["53"])
+    ultima_ubicacion: str | None = Field(None, max_length=300, examples=["Los corales"])
+    reportante_phone: str | None = Field(None, max_length=120, description="Contacto de quien reporta (tel/email/texto).")
+    reportante_name: str | None = Field(None, max_length=120)
+    fuente: str | None = Field(None, max_length=2048, description="Origen del dato (URL/fuente).")
+    id_externo: str | None = Field(None, max_length=120, description="ID en el sistema origen; da idempotencia al import.")
 
 
 class ImportarResultado(BaseModel):
@@ -328,9 +328,9 @@ class PersonaAdmin(BaseModel):
 
 
 class TestimonioIn(BaseModel):
-    mensaje: str | None = None
-    nombre_testigo: str | None = None
-    contacto_testigo: str | None = None
+    mensaje: str | None = Field(None, max_length=2000)
+    nombre_testigo: str | None = Field(None, max_length=120)
+    contacto_testigo: str | None = Field(None, max_length=200)
 
 
 class TestimonioCreado(BaseModel):
