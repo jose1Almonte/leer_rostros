@@ -152,17 +152,13 @@ python -m app.cli change-password admin
 
 ### Comparar foto contra toda la base — `POST /buscar`
 
-**Campos:** `file`* · `limite` (def. 25) · `offset`/`page` · `paginado` ·
-`estado` (`buscada`|`encontrada`|vacío).
-Por compatibilidad devuelve un array de candidatos. Si envías `paginado=true`,
-devuelve `{ data, meta }` para poder implementar "Cargar más".
+**Campos:** `file`* · `limite` (def. 25) · `estado` (`buscada`|`encontrada`|vacío).
+Devuelve un array legacy de candidatos.
 
 ```js
 const fd = new FormData();
 fd.append("file", file);
 fd.append("limite", "25");
-fd.append("offset", "0");
-fd.append("paginado", "true");
 const r = await fetch("/api/buscar", {
   method: "POST",
   headers: { Authorization: "Bearer " + token },  // <-- requerido
@@ -170,24 +166,43 @@ const r = await fetch("/api/buscar", {
 });
 ```
 
+### Comparar foto paginado — `POST /buscar/paginated`
+
+**Campos:** `file`* · `limite` (def. 25) · `offset`/`page` · `estado`.
+Devuelve `{ data, meta }` para implementar "Cargar más".
+
+```js
+const fd = new FormData();
+fd.append("file", file);
+fd.append("limite", "25");
+fd.append("offset", "25");
+const r = await fetch("/api/buscar/paginated", {
+  method: "POST",
+  headers: { Authorization: "Bearer " + token },
+  body: fd,
+});
+const page = await r.json();
+```
+
 ### Listar / moderar — `GET /admin/personas`
 
-Query: `limite`/`per_page`, `offset`/`page`, `paginado`, `estado`/`status`,
-`moderacion` (`aprobada`|`rechazada`|`pendiente`), `nombre`, `apellido`,
-`cedula`/`doc_numero`, `es_menor` (boolean).
+Query: `limite`, `estado`, `moderacion` (`aprobada`|`rechazada`|`pendiente`).
+Devuelve array legacy.
 
-Para dashboard usa `paginado=true`; por compatibilidad, sin ese flag sigue
-devolviendo un array legacy.
+### Listar personas paginado — `GET /admin/personas/paginated`
+
+Query: `limite`/`per_page`, `offset`/`page`, `estado`/`status`, `moderacion`,
+`nombre`, `apellido`, `cedula`/`doc_numero`, `es_menor` (boolean).
+Devuelve `{ data, meta }`.
 
 ```js
 const params = new URLSearchParams({
   per_page: "25",
   offset: "0",
-  paginado: "true",
   nombre: "ana",
   es_menor: "true"
 });
-const r = await fetch(`/api/admin/personas?${params}`, {
+const r = await fetch(`/api/admin/personas/paginated?${params}`, {
   headers: { Authorization: "Bearer " + token }
 });
 const page = await r.json();
@@ -283,35 +298,44 @@ await fetch("/api/reportes/publicacion", {
 ### Listar reportes — `GET /admin/reportes`
 
 Query: `tipo` (`falla`|`publicacion`), `estado`
+(`pendiente`|`revisado`|`resuelto`|`descartado`), `limite` (def. 100).
+Devuelve array legacy.
+
+### Listar reportes paginado — `GET /admin/reportes/paginated`
+
+Query: `tipo` (`falla`|`publicacion`), `estado`
 (`pendiente`|`revisado`|`resuelto`|`descartado`), `limite` (def. 100),
-`offset`/`page`, `paginado`.
+`offset`/`page`.
 
 ```js
-const r = await fetch("/api/admin/reportes?tipo=falla&estado=pendiente&paginado=true", {
+const r = await fetch("/api/admin/reportes/paginated?tipo=falla&estado=pendiente", {
   headers: { Authorization: "Bearer " + token }
 });
 const page = await r.json();
 ```
 
-**Respuesta 200:** por defecto array de `ReporteAdmin`; con `paginado=true`,
-`{ data, meta }`. Los de tipo `publicacion` traen
+**Respuesta 200:** `{ data, meta }`. Los de tipo `publicacion` traen
 `pub_nombre`, `pub_estado`, `pub_image_url` y `pub_moderacion` (snapshot de
 la publicación al momento del query).
 
 ### Listar testimonios — `GET /admin/testimonios`
 
+Query: `estado` (`pendiente`|`aprobada`|`rechazada`), `limite` (def. 100).
+Devuelve array legacy.
+
+### Listar testimonios paginado — `GET /admin/testimonios/paginated`
+
 Query: `estado` (`pendiente`|`aprobada`|`rechazada`), `limite` (def. 100),
-`offset`/`page`, `paginado`.
+`offset`/`page`.
 
 ```js
-const r = await fetch("/api/admin/testimonios?estado=pendiente&paginado=true", {
+const r = await fetch("/api/admin/testimonios/paginated?estado=pendiente", {
   headers: { Authorization: "Bearer " + token }
 });
 const page = await r.json();
 ```
 
-**Respuesta 200:** por defecto array de `TestimonioAdmin`; con `paginado=true`,
-`{ data, meta }`.
+**Respuesta 200:** `{ data, meta }`.
 
 ### Cambiar estado de un reporte — `PATCH /admin/reportes/{id}/estado?valor=revisado`
 

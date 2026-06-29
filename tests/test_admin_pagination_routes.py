@@ -93,23 +93,13 @@ def test_admin_personas_legacy_array_and_paginated_filters(fake_repos):
 
     legacy = main.listar(
         limite=1,
-        per_page=None,
         estado=None,
-        status=None,
         moderacion=None,
-        nombre=None,
-        apellido=None,
-        cedula=None,
-        doc_numero=None,
-        es_menor=None,
-        offset=0,
-        page=None,
-        paginado=False,
     )
     assert isinstance(legacy, list)
     assert len(legacy) == 1
 
-    paginated = main.listar(
+    paginated = main.listar_paginated(
         limite=100,
         per_page=10,
         estado=None,
@@ -122,7 +112,6 @@ def test_admin_personas_legacy_array_and_paginated_filters(fake_repos):
         es_menor=True,
         offset=0,
         page=None,
-        paginado=True,
     )
     assert isinstance(paginated, PaginaPersonas)
     assert len(paginated.data) == 1
@@ -143,20 +132,16 @@ def test_admin_reportes_legacy_array_and_paginated_envelope(fake_repos):
         tipo=None,
         estado=None,
         limite=1,
-        offset=0,
-        page=None,
-        paginado=False,
     )
     assert isinstance(legacy, list)
     assert len(legacy) == 1
 
-    paginated = main.listar_reportes(
+    paginated = main.listar_reportes_paginated(
         tipo=None,
         estado=None,
         limite=1,
         offset=0,
         page=None,
-        paginado=True,
     )
     assert isinstance(paginated, PaginaReportes)
     assert len(paginated.data) == 1
@@ -175,19 +160,15 @@ def test_admin_testimonios_legacy_array_and_paginated_envelope(fake_repos):
     legacy = main.listar_testimonios_admin(
         estado=None,
         limite=1,
-        offset=0,
-        page=None,
-        paginado=False,
     )
     assert isinstance(legacy, list)
     assert len(legacy) == 1
 
-    paginated = main.listar_testimonios_admin(
+    paginated = main.listar_testimonios_admin_paginated(
         estado="pendiente",
         limite=1,
         offset=0,
         page=None,
-        paginado=True,
     )
     assert isinstance(paginated, PaginaTestimonios)
     assert len(paginated.data) == 1
@@ -216,22 +197,18 @@ def test_buscar_admin_legacy_array_and_paginated_envelope(fake_repos, monkeypatc
             file=UploadFile(filename="face.jpg", file=BytesIO(b"image-bytes")),
             limite=1,
             estado=None,
-            offset=0,
-            page=None,
-            paginado=False,
         )
     )
     assert isinstance(legacy, list)
     assert len(legacy) == 1
 
     paginated = asyncio.run(
-        main.buscar_admin(
+        main.buscar_admin_paginated(
             file=UploadFile(filename="face.jpg", file=BytesIO(b"image-bytes")),
             limite=1,
             estado=None,
             offset=1,
             page=None,
-            paginado=True,
         )
     )
     assert isinstance(paginated, PaginaCandidatos)
