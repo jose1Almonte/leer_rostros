@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any
 
+import psycopg
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -180,11 +181,11 @@ async def lifespan(app: FastAPI):
 
     try:
         init_db()
-    except Exception:
+    except (psycopg.errors.DuplicateTable, psycopg.errors.ProgrammingError):
         # Otro worker ganó la carrera de creación de esquema; al reintentar ya existe.
         from contextlib import suppress
 
-        with suppress(Exception):
+        with suppress(psycopg.errors.DuplicateTable, psycopg.errors.ProgrammingError):
             init_db()
 
     pool = get_pool()
