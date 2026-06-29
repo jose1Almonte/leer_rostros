@@ -42,13 +42,16 @@ from app.testimonios.use_cases import (
 from app.personas.use_cases import (
     AgregarHistorial,
     BuscarAdmin,
+    BuscarPorTexto,
     EliminarPersona,
     ListarCoincidenciasBusqueda,
     ListarPersonasAdmin,
     ListarPublico,
     ModerarPersona,
     RegistrarBusqueda,
+    RegistrarBusquedaSinImagen,
     RegistrarEncontrado,
+    RegistrarEncontradoSinImagen,
     VerFichaPersona,
     VerTrazabilidad,
     VerTrazabilidadPublica,
@@ -78,7 +81,11 @@ from app.schemas import (
     ReporteCreado,
     ReporteFallaIn,
     ReportePublicacionIn,
+    CandidatoTexto,
+    RegistroSinImagenIn,
     ResultadoBusqueda,
+    ResultadoBusquedaSinImagen,
+    ResultadoBusquedaTexto,
     ResultadoHistorial,
     ResultadoRegistro,
     ResultadoVerificacion,
@@ -632,6 +639,121 @@ async def verificar_buscada(
     use_case = VerificarBuscada(get_repo())
     return _use_case_execute(
         use_case.execute, procesadas=procesadas, limite=limite, offset=offset, page=page
+    )
+
+
+# ----------------------- FLUJO SIN IMAGEN (solo texto) -----------------------
+# Endpoints ADICIONALES a los de imagen: registran/buscan por datos (cédula, nombre…)
+# cuando no hay foto. La coincidencia es por TEXTO, no por rostro.
+
+
+@app.post(
+    "/buscados/sin-imagen",
+    response_model=ResultadoBusquedaSinImagen,
+    status_code=201,
+    tags=["sin-imagen"],
+    summary="Familiar: registrar una búsqueda SIN foto y ver coincidencias por texto",
+)
+def registrar_busqueda_sin_imagen(datos: RegistroSinImagenIn, limite: int = 10,
+                                  offset: int = 0, page: int | None = None):
+    """Registra una búsqueda de persona **sin imagen** (solo datos) y devuelve los
+    **encontrados** que coinciden por **texto** (cédula exacta o nombre/apellido).
+
+    Validación: indicá al menos `nombre` o `doc_numero`. Paginado con `limite`/`offset`/`page`.
+    Es el equivalente sin-foto de `POST /buscados`. Los endpoints con imagen siguen igual.
+    """
+    use_case = RegistrarBusquedaSinImagen(get_repo())
+    return _use_case_execute(
+        use_case.execute,
+        nombre=datos.nombre,
+        apellido=datos.apellido,
+        edad=datos.edad,
+        es_menor=datos.es_menor,
+        doc_tipo=datos.doc_tipo,
+        doc_numero=datos.doc_numero,
+        telefono_contacto=datos.telefono_contacto,
+        descripcion=datos.descripcion,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
+
+
+@app.post(
+    "/encontrados/sin-imagen",
+    response_model=ResultadoBusquedaSinImagen,
+    status_code=201,
+    tags=["sin-imagen"],
+    summary="Rescatista: registrar una persona hallada SIN foto y ver quién la busca (inverso, por texto)",
+)
+def registrar_encontrado_sin_imagen(datos: RegistroSinImagenIn, limite: int = 10,
+                                    offset: int = 0, page: int | None = None):
+    """Registra una persona **encontrada sin imagen** (solo datos) y devuelve, a la
+    **inversa**, los **familiares que la buscan** que coinciden por **texto**.
+
+    Validación: indicá al menos `nombre` o `doc_numero`. Equivalente sin-foto de
+    `POST /encontrados`. Los endpoints con imagen siguen igual.
+    """
+    use_case = RegistrarEncontradoSinImagen(get_repo())
+    return _use_case_execute(
+        use_case.execute,
+        nombre=datos.nombre,
+        apellido=datos.apellido,
+        edad=datos.edad,
+        es_menor=datos.es_menor,
+        doc_tipo=datos.doc_tipo,
+        doc_numero=datos.doc_numero,
+        refugio=datos.refugio,
+        ubicacion=datos.ubicacion,
+        telefono_responsable=datos.telefono_responsable,
+        doc_responsable=datos.doc_responsable,
+        encontrado_por=datos.encontrado_por,
+        descripcion=datos.descripcion,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
+
+
+@app.get(
+    "/buscar/sin-imagen",
+    response_model=ResultadoBusquedaTexto,
+    tags=["sin-imagen"],
+    summary="Buscar por TEXTO (cédula/nombre) sin registrar nada — ambos sentidos",
+)
+def buscar_sin_imagen(
+    nombre: str | None = None,
+    apellido: str | None = None,
+    doc_numero: str | None = Query(None, description="Cédula/identificación."),
+    cedula: str | None = Query(None, description="Alias de doc_numero."),
+    estado: str | None = Query(
+        "encontrada",
+        description="Lado a buscar: 'encontrada' (default), 'buscada' (inverso) o vacío para ambos.",
+    ),
+    limite: int = 10,
+    offset: int = 0,
+    page: int | None = None,
+):
+    """Búsqueda **por texto** (no registra nada), paginada. Indicá al menos uno de
+    `nombre`, `apellido` o `doc_numero`/`cedula`.
+
+    - `estado=encontrada` (default): lo que consulta un familiar.
+    - `estado=buscada`: búsqueda inversa (a quién buscan), para un rescatista.
+    - `estado` vacío: ambos lados.
+
+    Devuelve candidatos ordenados por fuerza del match (cédula exacta = 100). Es el
+    equivalente sin-foto de `POST /buscar`; los endpoints con imagen siguen igual.
+    """
+    use_case = BuscarPorTexto(get_repo())
+    return _use_case_execute(
+        use_case.execute,
+        nombre=nombre,
+        apellido=apellido,
+        doc_numero=cedula if (cedula and cedula.strip()) else doc_numero,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
     )
 
 
