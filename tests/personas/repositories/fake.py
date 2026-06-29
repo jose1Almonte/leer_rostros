@@ -37,6 +37,14 @@ class FakePersonaRepository:
         self._historial: list[dict] = []  # eventos de trazabilidad
         self._seq: int = 0  # contador determinista para ids/timestamps de eventos
 
+    def _normaliza_uuid_text(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        try:
+            return str(UUID(value.strip()))
+        except ValueError:
+            return None
+
     def add(
         self,
         person_id: UUID,
@@ -256,6 +264,7 @@ class FakePersonaRepository:
         nombre: str | None = None,
         apellido: str | None = None,
         cedula: str | None = None,
+        person_id: str | None = None,
         es_menor: bool | None = None,
     ) -> int:
         return len({
@@ -268,6 +277,7 @@ class FakePersonaRepository:
                 nombre=nombre,
                 apellido=apellido,
                 cedula=cedula,
+                person_id=person_id,
                 es_menor=es_menor,
             )
         })
@@ -285,6 +295,7 @@ class FakePersonaRepository:
         nombre: str | None = None,
         apellido: str | None = None,
         cedula: str | None = None,
+        person_id: str | None = None,
         es_menor: bool | None = None,
     ) -> bool:
         if estado and persona.estado.value != estado:
@@ -296,6 +307,11 @@ class FakePersonaRepository:
         if not self._contains(persona.apellido, apellido):
             return False
         if not self._contains(persona.doc_numero, cedula):
+            return False
+        normalized_person_id = self._normaliza_uuid_text(person_id)
+        if normalized_person_id is None and person_id:
+            return False
+        if normalized_person_id is not None and str(persona.person_id) != normalized_person_id:
             return False
         if es_menor is not None and persona.es_menor is not es_menor:
             return False
@@ -338,6 +354,7 @@ class FakePersonaRepository:
         nombre: str | None = None,
         apellido: str | None = None,
         cedula: str | None = None,
+        person_id: str | None = None,
         es_menor: bool | None = None,
     ) -> list[dict]:
         """Return stored personas as PersonaAdmin-shaped dicts (paginado con offset)."""
@@ -350,6 +367,7 @@ class FakePersonaRepository:
                 nombre=nombre,
                 apellido=apellido,
                 cedula=cedula,
+                person_id=person_id,
                 es_menor=es_menor,
             ):
                 continue

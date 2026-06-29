@@ -23,6 +23,7 @@ class ListarPersonasAdmin:
         nombre: str | None = None,
         apellido: str | None = None,
         cedula: str | None = None,
+        person_id: str | None = None,
         es_menor: bool | None = None,
     ) -> PaginaPersonas:
         """List personas for admin view (paginado: limit + offset/page).
@@ -39,6 +40,7 @@ class ListarPersonasAdmin:
             nombre=nombre,
             apellido=apellido,
             cedula=cedula,
+            person_id=person_id,
             es_menor=es_menor,
         )
         total = self._repo.count_admin(
@@ -47,6 +49,7 @@ class ListarPersonasAdmin:
             nombre=nombre,
             apellido=apellido,
             cedula=cedula,
+            person_id=person_id,
             es_menor=es_menor,
         )
         data = [MenoresPrivacy(PersonaAdmin(**d)) for d in results]

@@ -192,7 +192,7 @@ Devuelve array legacy.
 ### Listar personas paginado — `GET /admin/personas/paginated`
 
 Query: `limite`/`per_page`, `offset`/`page`, `estado`/`status`, `moderacion`,
-`nombre`, `apellido`, `cedula`/`doc_numero`, `es_menor` (boolean).
+`nombre`, `apellido`, `cedula`/`doc_numero`, `person_id`, `es_menor` (boolean).
 Devuelve `{ data, meta }`.
 
 ```js
@@ -200,6 +200,7 @@ const params = new URLSearchParams({
   per_page: "25",
   offset: "0",
   nombre: "ana",
+  person_id: "992865da-fcc6-4bb2-9db3-3d4af38269ff",
   es_menor: "true"
 });
 const r = await fetch(`/api/admin/personas/paginated?${params}`, {

@@ -372,7 +372,7 @@ El token se obtiene de `POST /admin/login` (abajo).
   `estado`, `moderacion`.
 - `GET /admin/personas/paginated` — listar registros paginados. Query: `limite`,
   `offset` o `page`, `per_page`, `estado`/`status`, `moderacion`, `nombre`,
-  `apellido`, `cedula`/`doc_numero`, `es_menor`. Devuelve
+  `apellido`, `cedula`/`doc_numero`, `person_id`, `es_menor`. Devuelve
   **`{data:[...], meta:{total_records, current_page, total_pages, limit, offset}}`**.
   Recorrer todo: `limite=100&page=1`, `page=2`, …
 - `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
@@ -830,13 +830,14 @@ def listar_paginated(
     apellido: str | None = None,
     cedula: str | None = None,
     doc_numero: str | None = Query(None, description="Alias de cedula."),
+    person_id: str | None = Query(None, description="ID de la publicacion/persona."),
     es_menor: bool | None = None,
     offset: int = 0,
     page: int | None = None,
 ):
     """Lista registros. Filtra por `estado`/`status`, `moderacion`, `nombre`,
-    `apellido`, `cedula`/`doc_numero` y `es_menor`; pagina con `limite`/`per_page` +
-    `offset` (ej. `limite=100&offset=100`) o `page` (1-based).
+    `apellido`, `cedula`/`doc_numero`, `person_id` y `es_menor`; pagina con
+    `limite`/`per_page` + `offset` (ej. `limite=100&offset=100`) o `page` (1-based).
 
     Devuelve el envelope **`{data:[...], meta:{total_records, current_page,
     total_pages, limit, offset}}`**."""
@@ -849,6 +850,7 @@ def listar_paginated(
         nombre=nombre,
         apellido=apellido,
         cedula=cedula if cedula is not None else doc_numero,
+        person_id=person_id,
         es_menor=es_menor,
     )
 
@@ -863,6 +865,7 @@ def _listar_personas_admin_pagina(
     nombre: str | None = None,
     apellido: str | None = None,
     cedula: str | None = None,
+    person_id: str | None = None,
     es_menor: bool | None = None,
 ) -> PaginaPersonas:
     use_case = ListarPersonasAdmin(get_repo())
@@ -876,6 +879,7 @@ def _listar_personas_admin_pagina(
         nombre=nombre,
         apellido=apellido,
         cedula=cedula,
+        person_id=person_id,
         es_menor=es_menor,
     )
 

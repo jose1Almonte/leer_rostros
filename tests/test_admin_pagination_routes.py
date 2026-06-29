@@ -74,14 +74,15 @@ def test_admin_personas_legacy_array_and_paginated_filters(fake_repos):
     import app.main as main
 
     persona_repo, _, _ = fake_repos
+    ana = _persona(
+        nombre="Ana",
+        apellido="Gomez",
+        doc_numero="12345678",
+        es_menor=True,
+    )
     persona_repo._personas.extend(
         [
-            _persona(
-                nombre="Ana",
-                apellido="Gomez",
-                doc_numero="12345678",
-                es_menor=True,
-            ),
+            ana,
             _persona(
                 nombre="Luis",
                 apellido="Perez",
@@ -109,6 +110,7 @@ def test_admin_personas_legacy_array_and_paginated_filters(fake_repos):
         apellido="gom",
         cedula="345",
         doc_numero=None,
+        person_id=str(ana.person_id),
         es_menor=True,
         offset=0,
         page=None,
