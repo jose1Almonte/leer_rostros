@@ -282,6 +282,7 @@ class TestimonioCreado(BaseModel):
 
 class TestimonioPublico(BaseModel):
     id: str
+    person_id: str | None = None
     tipo: str
     archivo_url: str
     mensaje: str | None = None

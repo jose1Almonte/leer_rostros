@@ -62,6 +62,7 @@ class FakeTestimonioRepository:
         return [
             {
                 "id": t["id"],
+                "person_id": t["person_id"],
                 "tipo": t["tipo"],
                 "archivo_url": t["archivo_url"],
                 "mensaje": t["mensaje"],
@@ -70,6 +71,25 @@ class FakeTestimonioRepository:
             }
             for t in self._testimonios
             if t["person_id"] == pid and t["estado"] == "aprobada"
+        ]
+
+    def list_all_aprobados(self, limite: int = 50) -> list[dict]:
+        results = sorted(
+            (t for t in self._testimonios if t["estado"] == "aprobada"),
+            key=lambda t: t["created_at"],
+            reverse=True,
+        )[:limite]
+        return [
+            {
+                "id": t["id"],
+                "person_id": t["person_id"],
+                "tipo": t["tipo"],
+                "archivo_url": t["archivo_url"],
+                "mensaje": t["mensaje"],
+                "nombre_testigo": t["nombre_testigo"],
+                "created_at": t["created_at"],
+            }
+            for t in results
         ]
 
     def list_admin(
