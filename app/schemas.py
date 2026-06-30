@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class LoginBody(BaseModel):
     usuario: str = Field("admin", examples=["admin"])
-    password: str = Field(..., examples=["reencuentros2026"])
+    password: str = Field(..., examples=["mi_contraseña_segura"])
 
 
 class LoginResp(BaseModel):
@@ -56,6 +56,88 @@ class ResultadoBusqueda(BaseModel):
         ...,
         description="Resultados paginados para clientes nuevos; mismos items que coincidencias.",
     )
+    meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
+
+
+class ResultadoVerificacion(BaseModel):
+    """Respuesta del flujo INVERSO (RESCATISTA): dada la foto de una persona hallada,
+    los **familiares que la están buscando**, ordenados por parecido facial.
+
+    Es el espejo de `ResultadoBusqueda`: aquí se busca entre las BÚSQUEDAS activas
+    (`buscada`), no entre los encontrados. **No registra nada** — solo consulta.
+    El `telefono` de cada candidato es el **contacto del familiar** para el reencuentro.
+    """
+
+    total: int = Field(..., description="Cantidad de familiares (búsquedas) que coinciden en ESTA página.")
+    buscadores: list[Candidato] = Field(
+        ...,
+        description="Familiares con una búsqueda activa que coincide con esta persona, "
+        "ordenados por parecido (mayor primero). Su `telefono` es el contacto del familiar.",
+    )
+    meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
+
+
+# ----------------------- FLUJO SIN IMAGEN (solo texto) -----------------------
+
+
+class CandidatoTexto(BaseModel):
+    """Candidato de la búsqueda por TEXTO (sin imagen): coincidencia por datos, no por rostro."""
+
+    person_id: str
+    estado: str = Field(..., description="'buscada' o 'encontrada'.")
+    es_menor: bool = False
+    nombre: str | None = Field(None, description="Oculto si es menor y la coincidencia es baja (<20%).")
+    apellido: str | None = None
+    edad: str | None = None
+    refugio: str | None = None
+    ubicacion: str | None = None
+    telefono: str | None = Field(None, description="Teléfono de contacto para el reencuentro.")
+    encontrado_por: str | None = None
+    descripcion: str | None = None
+    image_url: str = Field("", description="Vacío en registros sin imagen.")
+    coincidencia: int = Field(..., description="Fuerza del match de texto (0-100).")
+    confianza: str = Field(..., description="'alta' (cédula exacta) | 'media' | 'baja'.")
+    tipo_match: str = Field(..., description="'documento' (cédula exacta) o 'nombre'.")
+
+
+class RegistroSinImagenIn(BaseModel):
+    """Datos de una persona para registrar SIN imagen (buscada o encontrada).
+
+    Validación: indicá al menos `nombre` o `doc_numero`. El resto es opcional.
+    """
+
+    nombre: str | None = Field(None, max_length=120, examples=["María"])
+    apellido: str | None = Field(None, max_length=120, examples=["Pérez"])
+    edad: str | None = Field(None, max_length=20, examples=["34"])
+    es_menor: bool = Field(False, description="Marca de menor (enmascara el nombre si la coincidencia es baja).")
+    doc_tipo: str | None = Field(None, max_length=40, examples=["V"])
+    doc_numero: str | None = Field(None, max_length=40, description="Cédula/identificación.", examples=["12345678"])
+    telefono_contacto: str | None = Field(None, max_length=120, description="Contacto del familiar (flujo buscado).")
+    refugio: str | None = Field(None, max_length=300, description="Refugio donde se encuentra (flujo encontrado).")
+    ubicacion: str | None = Field(None, max_length=300, description="Última ubicación conocida / dónde se la vio.")
+    telefono_responsable: str | None = Field(None, max_length=120, description="Contacto del responsable (flujo encontrado).")
+    doc_responsable: str | None = Field(None, max_length=60)
+    encontrado_por: str | None = Field(None, max_length=160, description="Quién la encontró/reporta.")
+    descripcion: str | None = Field(None, max_length=2000, description="Descripción física / notas.")
+
+
+class ResultadoBusquedaSinImagen(BaseModel):
+    """Respuesta al registrar SIN imagen: el código + coincidencias por texto + paginación."""
+
+    codigo: str = Field(..., description="Código del registro generado.")
+    person_id: str
+    total: int = Field(..., description="Coincidencias por texto en ESTA página.")
+    coincidencias: list[CandidatoTexto] = Field(
+        ..., description="Personas del lado opuesto que coinciden por texto (cédula/nombre)."
+    )
+    meta: PageMeta
+
+
+class ResultadoBusquedaTexto(BaseModel):
+    """Respuesta de la búsqueda por TEXTO autónoma (no registra nada)."""
+
+    total: int = Field(..., description="Coincidencias por texto en ESTA página.")
+    coincidencias: list[CandidatoTexto]
     meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
 
 
@@ -133,11 +215,11 @@ class EventoHistorial(BaseModel):
 class HistorialEventoIn(BaseModel):
     """Nuevo avistamiento para el histórico de una persona ya registrada."""
 
-    refugio: str | None = Field(None, description="Refugio donde está ahora.", examples=["Refugio Sur, Valencia"])
-    ubicacion: str | None = Field(None, description="Dónde se la vio/encontró.", examples=["Av. Bolívar, frente a la plaza"])
-    encontrado_por: str | None = Field(None, description="Quién la reporta ahora.", examples=["José (rescatista)"])
-    telefono_responsable: str | None = Field(None, description="Teléfono de contacto del responsable.")
-    nota: str | None = Field(None, description="Nota libre del evento.", examples=["La trasladaron a otro refugio."])
+    refugio: str | None = Field(None, max_length=300, description="Refugio donde está ahora.", examples=["Refugio Sur, Valencia"])
+    ubicacion: str | None = Field(None, max_length=300, description="Dónde se la vio/encontró.", examples=["Av. Bolívar, frente a la plaza"])
+    encontrado_por: str | None = Field(None, max_length=160, description="Quién la reporta ahora.", examples=["José (rescatista)"])
+    telefono_responsable: str | None = Field(None, max_length=120, description="Teléfono de contacto del responsable.")
+    nota: str | None = Field(None, max_length=2000, description="Nota libre del evento.", examples=["La trasladaron a otro refugio."])
 
 
 class ResultadoHistorial(BaseModel):
@@ -154,6 +236,35 @@ class TrazaPersona(BaseModel):
     person_id: str
     total_eventos: int
     eventos: list[EventoHistorial] = Field(..., description="Eventos en orden cronológico (más antiguo primero).")
+
+
+class EventoHistorialPublico(BaseModel):
+    """Un avistamiento del histórico en su forma PÚBLICA: SIN datos sensibles.
+
+    Igual que `EventoHistorial` pero **omite el teléfono del responsable**. Es lo que
+    ve cualquier persona (no admin) al consultar el rastro de un encontrado visible."""
+
+    id: str
+    person_id: str
+    refugio: str | None = Field(None, description="Refugio donde estaba en este evento.")
+    ubicacion: str | None = Field(None, description="Dónde se la vio/encontró en este evento.")
+    encontrado_por: str | None = Field(None, description="Quién la reportó en este evento.")
+    nota: str | None = Field(None, description="Nota libre (p. ej. 'registro inicial', 'traslado').")
+    created_at: datetime = Field(..., description="Timestamp del avistamiento.")
+
+
+class TrazaPersonaPublica(BaseModel):
+    """Histórico PÚBLICO (trazabilidad) de una persona encontrada, sin teléfono.
+
+    Pensado para que **cualquier persona** siga el rastro de un encontrado: dónde ha
+    estado y cuándo, en orden cronológico. Solo disponible para personas **visibles**
+    (moderación aprobada); el teléfono del responsable NO se incluye (solo el admin lo ve)."""
+
+    person_id: str
+    total_eventos: int = Field(..., description="Cantidad de avistamientos en el histórico.")
+    eventos: list[EventoHistorialPublico] = Field(
+        ..., description="Avistamientos en orden cronológico (el más antiguo primero)."
+    )
 
 
 class FichaPersona(BaseModel):
@@ -175,21 +286,21 @@ class FichaPersona(BaseModel):
 class ReporteFallaIn(BaseModel):
     """Reporte de una falla/bug de la página."""
 
-    descripcion: str = Field(..., min_length=3, description="Descripción de la falla encontrada.",
+    descripcion: str = Field(..., min_length=3, max_length=2000, description="Descripción de la falla encontrada.",
                              examples=["Al subir una foto el botón se queda cargando y no pasa nada."])
-    url: str | None = Field(None, description="Página/URL donde ocurrió (opcional).",
+    url: str | None = Field(None, max_length=2048, description="Página/URL donde ocurrió (opcional).",
                             examples=["https://symtechven.com/"])
-    contacto: str | None = Field(None, description="Tu email o teléfono para seguimiento (opcional).")
+    contacto: str | None = Field(None, max_length=200, description="Tu email o teléfono para seguimiento (opcional).")
 
 
 class ReportePublicacionIn(BaseModel):
     """Reporte de una publicación o foto inadecuada."""
 
-    person_id: str = Field(..., description="ID de la publicación reportada (el person_id del candidato).",
+    person_id: str = Field(..., max_length=64, description="ID de la publicación reportada (el person_id del candidato).",
                            examples=["992865da-fcc6-4bb2-9db3-3d4af38269ff"])
-    descripcion: str = Field(..., min_length=3, description="Motivo del reporte (por qué es inadecuada).",
+    descripcion: str = Field(..., min_length=3, max_length=2000, description="Motivo del reporte (por qué es inadecuada).",
                              examples=["La foto no corresponde a una persona / contenido ofensivo."])
-    contacto: str | None = Field(None, description="Tu contacto para seguimiento (opcional).")
+    contacto: str | None = Field(None, max_length=200, description="Tu contacto para seguimiento (opcional).")
 
 
 class ReporteCreado(BaseModel):
@@ -219,23 +330,37 @@ class ReporteAdmin(BaseModel):
     pub_moderacion: str | None = Field(None, description="Estado de moderación actual de la publicación.")
 
 
+class PaginaCandidatos(BaseModel):
+    """Listado paginado de candidatos para busquedas admin: `data` + `meta`."""
+
+    data: list[Candidato]
+    meta: PageMeta
+
+
+class PaginaReportes(BaseModel):
+    """Listado paginado de reportes para el panel de admin: `data` + `meta`."""
+
+    data: list[ReporteAdmin]
+    meta: PageMeta
+
+
 class ImportarEncontradoIn(BaseModel):
     """Un registro de persona ENCONTRADA para carga masiva (formato de importación).
 
     La foto se toma de `foto_url` (el server la descarga). Pensado para importar data
     pública existente. Idempotente por `id_externo` (re-importar no duplica)."""
 
-    foto_url: str = Field(..., description="URL pública de la foto del rostro.",
+    foto_url: str = Field(..., max_length=2048, description="URL pública de la foto del rostro.",
                           examples=["https://terremotovenezuela.app/api/missing/xxxx/photo"])
-    nombre: str | None = Field(None, examples=["Ricardo"])
-    apellido: str | None = Field(None, examples=["Anselmi"])
-    cedula: str | None = Field(None, description="Documento (puede ir vacío).")
-    edad: str | None = Field(None, examples=["53"])
-    ultima_ubicacion: str | None = Field(None, examples=["Los corales"])
-    reportante_phone: str | None = Field(None, description="Contacto de quien reporta (tel/email/texto).")
-    reportante_name: str | None = None
-    fuente: str | None = Field(None, description="Origen del dato (URL/fuente).")
-    id_externo: str | None = Field(None, description="ID en el sistema origen; da idempotencia al import.")
+    nombre: str | None = Field(None, max_length=120, examples=["Ricardo"])
+    apellido: str | None = Field(None, max_length=120, examples=["Anselmi"])
+    cedula: str | None = Field(None, max_length=40, description="Documento (puede ir vacío).")
+    edad: str | None = Field(None, max_length=20, examples=["53"])
+    ultima_ubicacion: str | None = Field(None, max_length=300, examples=["Los corales"])
+    reportante_phone: str | None = Field(None, max_length=120, description="Contacto de quien reporta (tel/email/texto).")
+    reportante_name: str | None = Field(None, max_length=120)
+    fuente: str | None = Field(None, max_length=2048, description="Origen del dato (URL/fuente).")
+    id_externo: str | None = Field(None, max_length=120, description="ID en el sistema origen; da idempotencia al import.")
 
 
 class ImportarResultado(BaseModel):
@@ -267,9 +392,9 @@ class PersonaAdmin(BaseModel):
 
 
 class TestimonioIn(BaseModel):
-    mensaje: str | None = None
-    nombre_testigo: str | None = None
-    contacto_testigo: str | None = None
+    mensaje: str | None = Field(None, max_length=2000)
+    nombre_testigo: str | None = Field(None, max_length=120)
+    contacto_testigo: str | None = Field(None, max_length=200)
 
 
 class TestimonioCreado(BaseModel):
@@ -305,6 +430,13 @@ class TestimonioAdmin(BaseModel):
     pub_nombre: str | None = None
     pub_estado: str | None = None
     pub_image_url: str | None = None
+
+
+class PaginaTestimonios(BaseModel):
+    """Listado paginado de testimonios para el panel de admin: `data` + `meta`."""
+
+    data: list[TestimonioAdmin]
+    meta: PageMeta
 
 
 class AdminStats(BaseModel):

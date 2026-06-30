@@ -2,9 +2,9 @@
 
 from typing import TypeVar
 
-from app.schemas import AlertaDuplicado, AlertaFamiliar, Candidato, PersonaAdmin
+from app.schemas import AlertaDuplicado, AlertaFamiliar, Candidato, CandidatoTexto, PersonaAdmin
 
-T = TypeVar("T", Candidato, PersonaAdmin, AlertaFamiliar, AlertaDuplicado)
+T = TypeVar("T", Candidato, CandidatoTexto, PersonaAdmin, AlertaFamiliar, AlertaDuplicado)
 
 
 # % mínimo de coincidencia para mostrar los datos de un MENOR en una búsqueda.

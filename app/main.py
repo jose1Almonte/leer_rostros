@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any
 
-import requests
+import psycopg
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -43,15 +43,20 @@ from app.testimonios.use_cases import (
 from app.personas.use_cases import (
     AgregarHistorial,
     BuscarAdmin,
+    BuscarPorTexto,
     EliminarPersona,
     ListarCoincidenciasBusqueda,
     ListarPersonasAdmin,
     ListarPublico,
     ModerarPersona,
     RegistrarBusqueda,
+    RegistrarBusquedaSinImagen,
     RegistrarEncontrado,
+    RegistrarEncontradoSinImagen,
     VerFichaPersona,
     VerTrazabilidad,
+    VerTrazabilidadPublica,
+    VerificarBuscada,
 )
 from app.reportes.repositories.reporte import ReporteRepository
 from app.reportes.use_cases import (
@@ -65,8 +70,11 @@ from app.schemas import (
     Candidato,
     LoginBody,
     LoginResp,
+    PaginaCandidatos,
     PaginaPersonas,
     PaginaPublica,
+    PaginaReportes,
+    PaginaTestimonios,
     ImportarEncontradoIn,
     ImportarResultado,
     PersonaAdmin,
@@ -74,15 +82,21 @@ from app.schemas import (
     ReporteCreado,
     ReporteFallaIn,
     ReportePublicacionIn,
+    CandidatoTexto,
+    RegistroSinImagenIn,
     ResultadoBusqueda,
+    ResultadoBusquedaSinImagen,
+    ResultadoBusquedaTexto,
     ResultadoHistorial,
     ResultadoRegistro,
+    ResultadoVerificacion,
     TestimonioAdmin,
     TestimonioCreado,
     TestimonioPublico,
     HistorialEventoIn,
     FichaPersona,
     TrazaPersona,
+    TrazaPersonaPublica,
 )
 from app.shared._exceptions import (
     ArchivoInvalidoError,
@@ -93,6 +107,7 @@ from app.shared._exceptions import (
     TestimonioNotFoundError,
     TestimonioValidationError,
 )
+from app.shared._net import descargar_imagen_segura
 
 # Module-level policy and repositories (instantiated in lifespan)
 _policy: MatchingPolicy | None = None
@@ -174,11 +189,11 @@ async def lifespan(app: FastAPI):
 
     try:
         init_db()
-    except Exception:
+    except (psycopg.errors.DuplicateTable, psycopg.errors.ProgrammingError):
         # Otro worker ganó la carrera de creación de esquema; al reintentar ya existe.
         from contextlib import suppress
 
-        with suppress(Exception):
+        with suppress(psycopg.errors.DuplicateTable, psycopg.errors.ProgrammingError):
             init_db()
 
     pool = get_pool()
@@ -294,6 +309,11 @@ coincidencias sin traer todo el listado en una sola respuesta. La respuesta incl
 Quien encontró a alguien lo registra. Si un familiar ya lo buscaba, la respuesta trae
 una **alerta** con el nombre y teléfono del familiar.
 
+> **Flujo INVERSO explícito — `POST /encontrados/verificar`:** el espejo de `/buscados`.
+> El rescatista sube una foto y obtiene los **familiares que la están buscando**
+> (ordenados por parecido, con su teléfono), **sin registrar nada**. Sirve para
+> verificar cuantas veces quiera, antes o después de registrar a la persona.
+
 | Campo | Tipo | Obligatorio | Ejemplo |
 |---|---|---|---|
 | `files` | archivo(s) | **Sí** (con rostro) | foto.jpg |
@@ -350,18 +370,31 @@ El token se obtiene de `POST /admin/login` (abajo).
   vez, el admin se siembra automáticamente desde `ADMIN_USER` / `ADMIN_PASSWORD` del
   `.env` si la tabla está vacía. Cambiá la password con
   `python -m app.cli change-password <usuario>`.
-- `POST /buscar` — comparar una foto contra TODA la base (campos `file`, `limite`, `estado`).
+- `POST /buscar` — comparar una foto contra TODA la base y devolver array legacy
+  (campos `file`, `limite`, `estado`).
+- `POST /buscar/paginated` — misma busqueda admin, pero paginada con `limite`,
+  `offset`/`page`; devuelve `{data, meta}`.
 - `GET /admin/stats` — **conteos reales** para el dashboard (total, buscadas, encontradas,
   menores, ocultas, pendientes, reportes). Usalo para los totales; NO cuentes el largo de
   `/admin/personas` (viene topado por `limite`).
-- `GET /admin/personas` — listar registros **paginados**. Query: `limite`, `offset` o
-  `page`, `estado`, `moderacion`. Devuelve **`{data:[...], meta:{total_records, current_page,
-  total_pages, limit, offset}}`**. Recorrer todo: `limite=100&page=1`, `page=2`, …
+- `GET /admin/personas` — listar registros en array legacy. Query: `limite`,
+  `estado`, `moderacion`.
+- `GET /admin/personas/paginated` — listar registros paginados. Query: `limite`,
+  `offset` o `page`, `per_page`, `estado`/`status`, `moderacion`, `nombre`,
+  `apellido`, `cedula`/`doc_numero`, `person_id`, `es_menor`. Devuelve
+  **`{data:[...], meta:{total_records, current_page, total_pages, limit, offset}}`**.
+  Recorrer todo: `limite=100&page=1`, `page=2`, …
 - `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada|rechazada|pendiente` — moderar.
 - `DELETE /admin/personas/{person_id}` — borrar.
-- `GET /admin/reportes` — ver reportes recibidos (filtros `tipo`, `estado`).
+- `GET /admin/reportes` — ver reportes recibidos en array legacy (filtros `tipo`,
+  `estado`, `limite`).
+- `GET /admin/reportes/paginated` — ver reportes paginados (filtros `tipo`,
+  `estado`; paginacion con `limite`, `offset`/`page`; devuelve `{data, meta}`).
 - `PATCH /admin/reportes/{id}/estado` — marcar un reporte (pendiente/revisado/resuelto/descartado).
-- `GET /admin/testimonios` — ver testimonios recibidos (filtro `estado`).
+- `GET /admin/testimonios` — ver testimonios recibidos en array legacy (filtro
+  `estado`, `limite`).
+- `GET /admin/testimonios/paginated` — ver testimonios paginados (filtro `estado`;
+  paginacion con `limite`, `offset`/`page`; devuelve `{data, meta}`).
 - `PATCH /admin/testimonios/{id}/estado` — aprobar/rechazar testimonio.
 - `DELETE /admin/testimonios/{id}` — eliminar testimonio (borra el archivo).
 
@@ -394,12 +427,14 @@ app = FastAPI(
     swagger_ui_parameters={"persistAuthorization": True},
 )
 
-# CORS abierto a TODOS los orígenes (de prueba). Cualquier front (vzlaencuentra.com,
-# localhost, etc.) puede consumir la API. La auth admin va por header Bearer (JWT),
-# por eso allow_credentials=False es compatible con allow_origins=["*"].
+# CORS: por ahora ABIERTO A TODOS (cors_origins="*" por defecto). Ajustable a una
+# lista restringida con CORS_ORIGINS en el .env cuando se quiera cerrar.
+# La auth admin va por header Bearer (JWT), por eso allow_credentials=False.
+# Nota: CORS lo aplica el NAVEGADOR; no bloquea clientes server-to-server (curl, etc.).
+_cors_origins = get_settings().cors_origins_list
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -450,13 +485,13 @@ async def registrar_busqueda(
     files: list[UploadFile] = File(
         ..., description="Foto(s) del rostro de la persona buscada (obligatorio)."
     ),
-    nombre: str | None = Form(None),
-    apellido: str | None = Form(None),
-    edad: str | None = Form(None),
-    doc_tipo: str | None = Form(None),
-    doc_numero: str | None = Form(None),
+    nombre: str | None = Form(None, max_length=120),
+    apellido: str | None = Form(None, max_length=120),
+    edad: str | None = Form(None, max_length=20),
+    doc_tipo: str | None = Form(None, max_length=40),
+    doc_numero: str | None = Form(None, max_length=40),
     telefono_contacto: str | None = Form(
-        None, description="Teléfono del familiar para el reencuentro."
+        None, max_length=120, description="Teléfono del familiar para el reencuentro."
     ),
     limite: int = Form(
         10, description="Tamaño de página (1-50). Cuántas coincidencias por página."
@@ -532,22 +567,22 @@ async def registrar_encontrado(
     es_menor: bool = Form(
         False, description="Marcar si es menor (etiqueta; el nombre SÍ se guarda/muestra)."
     ),
-    nombre: str | None = Form(None, description="Nombre del encontrado (null si no se conoce)."),
-    apellido: str | None = Form(None, description="Apellido del encontrado (null si no se conoce)."),
-    doc_tipo: str | None = Form(None),
-    doc_numero: str | None = Form(None),
-    refugio: str | None = Form(None, description="Refugio donde se encuentra."),
-    ubicacion: str | None = Form(None, description="Dónde se encontró a la persona."),
+    nombre: str | None = Form(None, max_length=120, description="Nombre del encontrado (null si no se conoce)."),
+    apellido: str | None = Form(None, max_length=120, description="Apellido del encontrado (null si no se conoce)."),
+    doc_tipo: str | None = Form(None, max_length=40),
+    doc_numero: str | None = Form(None, max_length=40),
+    refugio: str | None = Form(None, max_length=300, description="Refugio donde se encuentra."),
+    ubicacion: str | None = Form(None, max_length=300, description="Dónde se encontró a la persona."),
     encontrado_por: str | None = Form(
-        None, description="Nombre de quien encontró a la persona (se muestra al familiar)."
+        None, max_length=160, description="Nombre de quien encontró a la persona (se muestra al familiar)."
     ),
     telefono_responsable: str | None = Form(
-        None, description="Teléfono de quien lo encontró / responsable."
+        None, max_length=120, description="Teléfono de quien lo encontró / responsable."
     ),
     doc_responsable: str | None = Form(
-        None, description="Identificación del responsable."
+        None, max_length=60, description="Identificación del responsable."
     ),
-    descripcion: str | None = Form(None, description="Descripción física básica."),
+    descripcion: str | None = Form(None, max_length=2000, description="Descripción física básica."),
     confirmar_duplicado: bool = Form(
         False,
         description="Si la cédula ya existe entre los encontrados, en false solo avisa "
@@ -575,6 +610,156 @@ async def registrar_encontrado(
 
 
 @app.post(
+    "/encontrados/verificar",
+    response_model=ResultadoVerificacion,
+    tags=["rescatista"],
+    summary="Rescatista: ¿alguien está buscando a esta persona? (flujo INVERSO, sin registrar)",
+)
+async def verificar_buscada(
+    files: list[UploadFile] = File(
+        ..., description="Foto(s) del rostro de la persona hallada (obligatorio)."
+    ),
+    limite: int = Form(10, description="Tamaño de página (1-50)."),
+    offset: int = Form(0, description="Desplazamiento para paginar (alternativa a page)."),
+    page: int | None = Form(None, description="Página 1-based (tiene prioridad sobre offset)."),
+):
+    """**Flujo INVERSO del rescatista** — el espejo de `POST /buscados`.
+
+    El rescatista sube la foto de una persona hallada y obtiene la lista de
+    **familiares que la están buscando** (`buscada`), ordenados por **parecido facial**.
+    Cada candidato trae el **teléfono del familiar** para coordinar el reencuentro.
+
+    A diferencia de `POST /encontrados`, **este endpoint NO registra nada**: es solo una
+    consulta para *verificar* si alguien busca a esa persona — útil para revisar antes
+    (o después) de registrarla, cuantas veces haga falta.
+
+    - Mismo modelo facial (ArcFace buffalo_l) y umbral que las demás búsquedas.
+    - Solo familiares **visibles** (moderación aprobada). Menores: nombre protegido.
+    - `422` si no se detecta rostro en la(s) foto(s).
+    """
+    procesadas = await _procesar_fotos(files)
+    use_case = VerificarBuscada(get_repo())
+    return _use_case_execute(
+        use_case.execute, procesadas=procesadas, limite=limite, offset=offset, page=page
+    )
+
+
+# ----------------------- FLUJO SIN IMAGEN (solo texto) -----------------------
+# Endpoints ADICIONALES a los de imagen: registran/buscan por datos (cédula, nombre…)
+# cuando no hay foto. La coincidencia es por TEXTO, no por rostro.
+
+
+@app.post(
+    "/buscados/sin-imagen",
+    response_model=ResultadoBusquedaSinImagen,
+    status_code=201,
+    tags=["sin-imagen"],
+    summary="Familiar: registrar una búsqueda SIN foto y ver coincidencias por texto",
+)
+def registrar_busqueda_sin_imagen(datos: RegistroSinImagenIn, limite: int = 10,
+                                  offset: int = 0, page: int | None = None):
+    """Registra una búsqueda de persona **sin imagen** (solo datos) y devuelve los
+    **encontrados** que coinciden por **texto** (cédula exacta o nombre/apellido).
+
+    Validación: indicá al menos `nombre` o `doc_numero`. Paginado con `limite`/`offset`/`page`.
+    Es el equivalente sin-foto de `POST /buscados`. Los endpoints con imagen siguen igual.
+    """
+    use_case = RegistrarBusquedaSinImagen(get_repo())
+    return _use_case_execute(
+        use_case.execute,
+        nombre=datos.nombre,
+        apellido=datos.apellido,
+        edad=datos.edad,
+        es_menor=datos.es_menor,
+        doc_tipo=datos.doc_tipo,
+        doc_numero=datos.doc_numero,
+        telefono_contacto=datos.telefono_contacto,
+        descripcion=datos.descripcion,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
+
+
+@app.post(
+    "/encontrados/sin-imagen",
+    response_model=ResultadoBusquedaSinImagen,
+    status_code=201,
+    tags=["sin-imagen"],
+    summary="Rescatista: registrar una persona hallada SIN foto y ver quién la busca (inverso, por texto)",
+)
+def registrar_encontrado_sin_imagen(datos: RegistroSinImagenIn, limite: int = 10,
+                                    offset: int = 0, page: int | None = None):
+    """Registra una persona **encontrada sin imagen** (solo datos) y devuelve, a la
+    **inversa**, los **familiares que la buscan** que coinciden por **texto**.
+
+    Validación: indicá al menos `nombre` o `doc_numero`. Equivalente sin-foto de
+    `POST /encontrados`. Los endpoints con imagen siguen igual.
+    """
+    use_case = RegistrarEncontradoSinImagen(get_repo())
+    return _use_case_execute(
+        use_case.execute,
+        nombre=datos.nombre,
+        apellido=datos.apellido,
+        edad=datos.edad,
+        es_menor=datos.es_menor,
+        doc_tipo=datos.doc_tipo,
+        doc_numero=datos.doc_numero,
+        refugio=datos.refugio,
+        ubicacion=datos.ubicacion,
+        telefono_responsable=datos.telefono_responsable,
+        doc_responsable=datos.doc_responsable,
+        encontrado_por=datos.encontrado_por,
+        descripcion=datos.descripcion,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
+
+
+@app.get(
+    "/buscar/sin-imagen",
+    response_model=ResultadoBusquedaTexto,
+    tags=["sin-imagen"],
+    summary="Buscar por TEXTO (cédula/nombre) sin registrar nada — ambos sentidos",
+)
+def buscar_sin_imagen(
+    nombre: str | None = None,
+    apellido: str | None = None,
+    doc_numero: str | None = Query(None, description="Cédula/identificación."),
+    cedula: str | None = Query(None, description="Alias de doc_numero."),
+    estado: str | None = Query(
+        "encontrada",
+        description="Lado a buscar: 'encontrada' (default), 'buscada' (inverso) o vacío para ambos.",
+    ),
+    limite: int = 10,
+    offset: int = 0,
+    page: int | None = None,
+):
+    """Búsqueda **por texto** (no registra nada), paginada. Indicá al menos uno de
+    `nombre`, `apellido` o `doc_numero`/`cedula`.
+
+    - `estado=encontrada` (default): lo que consulta un familiar.
+    - `estado=buscada`: búsqueda inversa (a quién buscan), para un rescatista.
+    - `estado` vacío: ambos lados.
+
+    Devuelve candidatos ordenados por fuerza del match (cédula exacta = 100). Es el
+    equivalente sin-foto de `POST /buscar`; los endpoints con imagen siguen igual.
+    """
+    use_case = BuscarPorTexto(get_repo())
+    return _use_case_execute(
+        use_case.execute,
+        nombre=nombre,
+        apellido=apellido,
+        doc_numero=cedula if (cedula and cedula.strip()) else doc_numero,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
+
+
+@app.post(
     "/encontrados/{person_id}/historial",
     response_model=ResultadoHistorial,
     status_code=201,
@@ -582,11 +767,19 @@ async def registrar_encontrado(
     summary="Rescatista: agregar un avistamiento al histórico de una persona",
 )
 def agregar_historial(person_id: str, evento: HistorialEventoIn):
-    """Registra un nuevo **avistamiento** (trazabilidad) de una persona ya encontrada.
+    """**Trazabilidad — paso 2 (escribir):** registra un nuevo **avistamiento** de una
+    persona ya encontrada.
 
     Úsalo cuando un rescatista vuelve a ver/trasladar a la persona o corrige dónde
     está: se guarda el evento con su **timestamp** y se actualiza la ubicación
     actual de la ficha. Hace falta al menos `refugio` o `ubicacion`.
+
+    **Flujo del historial:**
+    1. Al registrar (`POST /encontrados`) se crea el primer evento ("registro inicial").
+    2. Cualquier rescatista agrega más avistamientos con **este** endpoint.
+    3. **Cualquier persona** consulta el rastro con `GET /encontrados/{person_id}/historial`
+       (público, sin teléfono). El admin ve el rastro completo (con teléfono) en
+       `GET /admin/personas/{person_id}/historial`.
 
     `404` si el `person_id` no existe; `422` si no se indica ningún lugar."""
     use_case = AgregarHistorial(get_repo())
@@ -599,6 +792,28 @@ def agregar_historial(person_id: str, evento: HistorialEventoIn):
         telefono_responsable=evento.telefono_responsable,
         nota=evento.nota,
     )
+
+
+@app.get(
+    "/encontrados/{person_id}/historial",
+    response_model=TrazaPersonaPublica,
+    tags=["rescatista"],
+    summary="Público: ver el historial (rastro) de una persona encontrada",
+)
+def ver_historial_publico(person_id: str):
+    """**Trazabilidad — paso 3 (leer, público):** **cualquier persona** puede ver el
+    **rastro** de una persona encontrada: cada avistamiento con su `ubicacion`,
+    `refugio`, quién la reportó (`encontrado_por`), la `nota` y el `timestamp`
+    (`created_at`), en **orden cronológico** (el más antiguo primero).
+
+    Pensado para que un familiar siga por dónde ha pasado la persona. **No incluye
+    datos sensibles**: el `telefono_responsable` se **omite** (eso solo lo ve el admin
+    en `GET /admin/personas/{person_id}/historial`).
+
+    Solo disponible para personas **visibles** (moderación aprobada). `404` si la
+    persona no existe o no es visible."""
+    use_case = VerTrazabilidadPublica(get_repo())
+    return _use_case_execute(use_case.execute, person_id=person_id)
 
 
 @app.get(
@@ -638,50 +853,160 @@ async def buscar_admin(
         None, description="Filtrar por 'buscada' o 'encontrada' (vacío = todas)."
     ),
 ):
+    """Devuelve el array legacy de candidatos para comparar una foto en admin."""
+    pagina = await _buscar_admin_pagina(file=file, limite=limite, estado=estado)
+    return pagina.data
+
+
+@app.post(
+    "/buscar/paginated",
+    response_model=PaginaCandidatos,
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: comparar una foto contra TODA la base (paginado)",
+)
+async def buscar_admin_paginated(
+    file: UploadFile = File(...),
+    limite: int = Form(25, description="Cuántas coincidencias devolver (1-50)."),
+    estado: str | None = Form(
+        None, description="Filtrar por 'buscada' o 'encontrada' (vacío = todas)."
+    ),
+    offset: int = Form(0, description="Cantidad de resultados a omitir."),
+    page: int | None = Form(
+        None, description="Pagina 1-based. Si se envia, tiene prioridad sobre offset."
+    ),
+):
+    """Devuelve `{data, meta}` para implementar cargar mas en busqueda admin."""
+    return await _buscar_admin_pagina(
+        file=file,
+        limite=limite,
+        estado=estado,
+        offset=offset,
+        page=page,
+    )
+
+
+async def _buscar_admin_pagina(
+    *,
+    file: UploadFile,
+    limite: int,
+    estado: str | None,
+    offset: int = 0,
+    page: int | None = None,
+) -> PaginaCandidatos:
     data = await file.read()
     try:
         embedding, _ = faces.embedding_from_bytes(data)
     except ValueError as e:
         raise HTTPException(422, str(e)) from None
     use_case = BuscarAdmin(get_repo())
-    return _use_case_execute(
-        use_case.execute, embedding=embedding, estado=estado, limite=limite
+    pagina = _use_case_execute(
+        use_case.execute,
+        embedding=embedding,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
     )
+    return pagina
 
 
 @app.get(
     "/admin/personas",
-    response_model=PaginaPersonas | list[PersonaAdmin],
+    response_model=list[PersonaAdmin],
     tags=["admin"],
     dependencies=[Depends(get_current_admin)],
     responses=_ADMIN_RESPONSES,
-    summary="Superadmin: listar registros (paginado)",
+    summary="Superadmin: listar registros",
 )
 def listar(
     limite: int = 100,
     estado: str | None = None,
     moderacion: str | None = None,
+):
+    """Lista registros en formato legacy array.
+
+    Para paginacion con metadata y filtros avanzados usa `/admin/personas/paginated`.
+    """
+    pagina = _listar_personas_admin_pagina(
+        limite=limite,
+        estado=estado,
+        moderacion=moderacion,
+    )
+    return pagina.data
+
+
+@app.get(
+    "/admin/personas/paginated",
+    response_model=PaginaPersonas,
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: listar registros paginados",
+)
+def listar_paginated(
+    limite: int = 100,
+    per_page: int | None = Query(None, description="Alias de limite."),
+    estado: str | None = None,
+    status: str | None = Query(None, description="Alias de estado."),
+    moderacion: str | None = None,
+    nombre: str | None = None,
+    apellido: str | None = None,
+    cedula: str | None = None,
+    doc_numero: str | None = Query(None, description="Alias de cedula."),
+    person_id: str | None = Query(None, description="ID de la publicacion/persona."),
+    es_menor: bool | None = None,
     offset: int = 0,
     page: int | None = None,
-    paginado: bool = False,
 ):
-    """Lista registros. Filtra por `estado` y/o `moderacion`; pagina con `limite` +
-    `offset` (ej. `limite=100&offset=100`) o `page` (1-based).
+    """Lista registros. Filtra por `estado`/`status`, `moderacion`, `nombre`,
+    `apellido`, `cedula`/`doc_numero`, `person_id` y `es_menor`; pagina con
+    `limite`/`per_page` + `offset` (ej. `limite=100&offset=100`) o `page` (1-based).
 
-    **Compatibilidad:** por defecto devuelve un **array** de registros (la página actual).
-    Con **`?paginado=true`** devuelve el envelope **`{data:[...], meta:{total_records,
-    current_page, total_pages, limit, offset}}`** (usá esto para mostrar total de páginas;
-    o `GET /admin/stats` para el total real)."""
+    Devuelve el envelope **`{data:[...], meta:{total_records, current_page,
+    total_pages, limit, offset}}`**."""
+    return _listar_personas_admin_pagina(
+        limite=per_page if per_page is not None else limite,
+        estado=estado if estado is not None else status,
+        moderacion=moderacion,
+        offset=offset,
+        page=page,
+        nombre=nombre,
+        apellido=apellido,
+        cedula=cedula if cedula is not None else doc_numero,
+        person_id=person_id,
+        es_menor=es_menor,
+    )
+
+
+def _listar_personas_admin_pagina(
+    *,
+    limite: int,
+    estado: str | None,
+    moderacion: str | None,
+    offset: int = 0,
+    page: int | None = None,
+    nombre: str | None = None,
+    apellido: str | None = None,
+    cedula: str | None = None,
+    person_id: str | None = None,
+    es_menor: bool | None = None,
+) -> PaginaPersonas:
     use_case = ListarPersonasAdmin(get_repo())
-    pagina = _use_case_execute(
+    return _use_case_execute(
         use_case.execute,
         limite=limite,
         estado=estado,
         moderacion=moderacion,
         offset=offset,
         page=page,
+        nombre=nombre,
+        apellido=apellido,
+        cedula=cedula,
+        person_id=person_id,
+        es_menor=es_menor,
     )
-    return pagina if paginado else pagina.data
 
 
 @app.get(
@@ -738,9 +1063,12 @@ def eliminar(person_id: str):
     summary="Trazabilidad: histórico de avistamientos de una persona",
 )
 def ver_trazabilidad(person_id: str):
-    """Devuelve el **rastro** completo de una persona encontrada: cada avistamiento
-    con su `ubicacion`, quién la reportó y el `timestamp`, en orden cronológico.
-    Incluye datos sensibles (teléfono), por eso es solo de admin. `404` si no existe."""
+    """**Trazabilidad (vista admin):** el **rastro** completo de una persona encontrada,
+    cada avistamiento con su `ubicacion`, quién la reportó y el `timestamp`, en orden
+    cronológico. A diferencia de la versión pública
+    (`GET /encontrados/{person_id}/historial`), **incluye el teléfono** del responsable,
+    por eso es solo de admin y funciona aunque la persona no esté aprobada.
+    `404` si no existe."""
     use_case = VerTrazabilidad(get_repo())
     return _use_case_execute(use_case.execute, person_id=person_id)
 
@@ -807,12 +1135,59 @@ def listar_reportes(
     estado: str | None = None,
     limite: int = 100,
 ):
+    """Lista reportes en formato legacy array."""
+    pagina = _listar_reportes_admin_pagina(
+        tipo=tipo,
+        estado=estado,
+        limite=limite,
+    )
+    return pagina.data
+
+
+@app.get(
+    "/admin/reportes/paginated",
+    response_model=PaginaReportes,
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: ver reportes paginados (fallas y publicaciones)",
+)
+def listar_reportes_paginated(
+    tipo: str | None = None,
+    estado: str | None = None,
+    limite: int = 100,
+    offset: int = 0,
+    page: int | None = None,
+):
     """Lista los reportes recibidos, del más reciente al más antiguo. Filtra por
     `tipo` ('falla' | 'publicacion') y/o `estado`. Los de publicación traen el
-    contexto de la publicación reportada (nombre, foto, estado de moderación)."""
+    contexto de la publicación reportada (nombre, foto, estado de moderación).
+    Devuelve `{data, meta}`."""
+    return _listar_reportes_admin_pagina(
+        tipo=tipo,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
+
+
+def _listar_reportes_admin_pagina(
+    *,
+    tipo: str | None,
+    estado: str | None,
+    limite: int,
+    offset: int = 0,
+    page: int | None = None,
+) -> PaginaReportes:
     use_case = ListarReportesAdmin(get_reporte_repo())
     return _use_case_execute(
-        use_case.execute, tipo=tipo, estado=estado, limite=limite
+        use_case.execute,
+        tipo=tipo,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
     )
 
 
@@ -835,12 +1210,12 @@ def cambiar_estado_reporte(reporte_id: str, valor: str):
 
 
 def _descargar_imagen(url: str) -> bytes:
-    """Descarga una imagen desde una URL pública (para la carga masiva)."""
-    r = requests.get(url, timeout=25, headers={"User-Agent": "reencuentros-importer"})
-    r.raise_for_status()
-    if not r.content:
-        raise ValueError("La URL no devolvió contenido.")
-    return r.content
+    """Descarga una imagen desde una URL pública (para la carga masiva).
+
+    Protegido contra SSRF: rechaza URLs que apunten a IPs internas/metadata y
+    revalida en cada redirección. Ver `app.shared._net`.
+    """
+    return descargar_imagen_segura(url)
 
 
 @app.post(
@@ -996,11 +1371,51 @@ def listar_testimonios_admin(
     estado: str | None = None,
     limite: int = 100,
 ):
+    """Lista testimonios en formato legacy array."""
+    pagina = _listar_testimonios_admin_pagina(estado=estado, limite=limite)
+    return pagina.data
+
+
+@app.get(
+    "/admin/testimonios/paginated",
+    response_model=PaginaTestimonios,
+    tags=["admin"],
+    dependencies=[Depends(get_current_admin)],
+    responses=_ADMIN_RESPONSES,
+    summary="Superadmin: listar testimonios recibidos paginados",
+)
+def listar_testimonios_admin_paginated(
+    estado: str | None = None,
+    limite: int = 100,
+    offset: int = 0,
+    page: int | None = None,
+):
     """Lista los testimonios recibidos. Filtra por `estado` (`pendiente`, `aprobada`,
     `rechazada`). Los testimonios linkeados a una publicación traen el contexto
-    (nombre, foto, estado) de esa publicación."""
+    (nombre, foto, estado) de esa publicación. Devuelve `{data, meta}`."""
+    return _listar_testimonios_admin_pagina(
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
+
+
+def _listar_testimonios_admin_pagina(
+    *,
+    estado: str | None = None,
+    limite: int = 100,
+    offset: int = 0,
+    page: int | None = None,
+) -> PaginaTestimonios:
     use_case = ListarTestimoniosAdmin(get_testimonio_repo())
-    return _use_case_execute(use_case.execute, estado=estado, limite=limite)
+    return _use_case_execute(
+        use_case.execute,
+        estado=estado,
+        limite=limite,
+        offset=offset,
+        page=page,
+    )
 
 
 @app.patch(

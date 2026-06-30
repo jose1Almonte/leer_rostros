@@ -153,7 +153,7 @@ python -m app.cli change-password admin
 ### Comparar foto contra toda la base — `POST /buscar`
 
 **Campos:** `file`* · `limite` (def. 25) · `estado` (`buscada`|`encontrada`|vacío).
-Devuelve un array de candidatos (mismo formato que `coincidencias`).
+Devuelve un array legacy de candidatos.
 
 ```js
 const fd = new FormData();
@@ -166,14 +166,58 @@ const r = await fetch("/api/buscar", {
 });
 ```
 
+### Comparar foto paginado — `POST /buscar/paginated`
+
+**Campos:** `file`* · `limite` (def. 25) · `offset`/`page` · `estado`.
+Devuelve `{ data, meta }` para implementar "Cargar más".
+
+```js
+const fd = new FormData();
+fd.append("file", file);
+fd.append("limite", "25");
+fd.append("offset", "25");
+const r = await fetch("/api/buscar/paginated", {
+  method: "POST",
+  headers: { Authorization: "Bearer " + token },
+  body: fd,
+});
+const page = await r.json();
+```
+
 ### Listar / moderar — `GET /admin/personas`
 
 Query: `limite`, `estado`, `moderacion` (`aprobada`|`rechazada`|`pendiente`).
+Devuelve array legacy.
+
+### Listar personas paginado — `GET /admin/personas/paginated`
+
+Query: `limite`/`per_page`, `offset`/`page`, `estado`/`status`, `moderacion`,
+`nombre`, `apellido`, `cedula`/`doc_numero`, `person_id`, `es_menor` (boolean).
+Devuelve `{ data, meta }`.
+
+```js
+const params = new URLSearchParams({
+  per_page: "25",
+  offset: "0",
+  nombre: "ana",
+  person_id: "992865da-fcc6-4bb2-9db3-3d4af38269ff",
+  es_menor: "true"
+});
+const r = await fetch(`/api/admin/personas/paginated?${params}`, {
+  headers: { Authorization: "Bearer " + token }
+});
+const page = await r.json();
+// page.data => filas visibles
+// page.meta => total_records, current_page, total_pages, limit, offset
+```
 
 ```json
-[{ "person_id":"...", "estado":"encontrada", "es_menor":false, "nombre":"Juan",
-   "refugio":"Refugio Central", "telefono":"0414-9999999", "codigo":"REE-...",
-   "moderacion":"aprobada", "fotos":["/fotos/..."], "created_at":"2026-06-27T..." }]
+{
+  "data": [{ "person_id":"...", "estado":"encontrada", "es_menor":false, "nombre":"Juan",
+    "refugio":"Refugio Central", "telefono":"0414-9999999", "codigo":"REE-...",
+    "moderacion":"aprobada", "fotos":["/fotos/..."], "created_at":"2026-06-27T..." }],
+  "meta": { "total_records": 150, "current_page": 1, "total_pages": 6, "limit": 25, "offset": 0 }
+}
 ```
 
 ### Aprobar / rechazar — `PATCH /admin/personas/{person_id}/moderacion?valor=aprobada`
@@ -254,18 +298,45 @@ await fetch("/api/reportes/publicacion", {
 
 ### Listar reportes — `GET /admin/reportes`
 
-Query: `tipo` (`falla`|`publicacion`), `estado` (`pendiente`|`revisado`|`resuelto`|`descartado`), `limite` (def. 100).
+Query: `tipo` (`falla`|`publicacion`), `estado`
+(`pendiente`|`revisado`|`resuelto`|`descartado`), `limite` (def. 100).
+Devuelve array legacy.
+
+### Listar reportes paginado — `GET /admin/reportes/paginated`
+
+Query: `tipo` (`falla`|`publicacion`), `estado`
+(`pendiente`|`revisado`|`resuelto`|`descartado`), `limite` (def. 100),
+`offset`/`page`.
 
 ```js
-const r = await fetch("/api/admin/reportes?tipo=falla&estado=pendiente", {
+const r = await fetch("/api/admin/reportes/paginated?tipo=falla&estado=pendiente", {
   headers: { Authorization: "Bearer " + token }
 });
-const reportes = await r.json();
+const page = await r.json();
 ```
 
-**Respuesta 200:** array de `ReporteAdmin`. Los de tipo `publicacion` traen
+**Respuesta 200:** `{ data, meta }`. Los de tipo `publicacion` traen
 `pub_nombre`, `pub_estado`, `pub_image_url` y `pub_moderacion` (snapshot de
 la publicación al momento del query).
+
+### Listar testimonios — `GET /admin/testimonios`
+
+Query: `estado` (`pendiente`|`aprobada`|`rechazada`), `limite` (def. 100).
+Devuelve array legacy.
+
+### Listar testimonios paginado — `GET /admin/testimonios/paginated`
+
+Query: `estado` (`pendiente`|`aprobada`|`rechazada`), `limite` (def. 100),
+`offset`/`page`.
+
+```js
+const r = await fetch("/api/admin/testimonios/paginated?estado=pendiente", {
+  headers: { Authorization: "Bearer " + token }
+});
+const page = await r.json();
+```
+
+**Respuesta 200:** `{ data, meta }`.
 
 ### Cambiar estado de un reporte — `PATCH /admin/reportes/{id}/estado?valor=revisado`
 

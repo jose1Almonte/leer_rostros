@@ -57,6 +57,119 @@ class FakePersonaRepository:
         self._personas.append(persona)
         return persona.photos
 
+    def add_sin_imagen(self, person_id: UUID, persona: PersonaBase) -> None:
+        """Almacena una persona SIN imagen ni embeddings (flujo solo-texto)."""
+        persona.photos = []
+        self._personas.append(persona)
+
+    @staticmethod
+    def _texto_score(
+        persona: PersonaBase,
+        *,
+        nombre: str | None,
+        apellido: str | None,
+        doc_numero: str | None,
+    ) -> int | None:
+        """Score de match textual (None si no matchea ningún criterio)."""
+        def norm(s: str | None) -> str:
+            return s.strip().casefold() if s else ""
+
+        matched = False
+        score = 0
+        if doc_numero and doc_numero.strip():
+            if persona.doc_numero and norm(persona.doc_numero) == norm(doc_numero):
+                score += 100
+                matched = True
+        if nombre and nombre.strip():
+            if persona.nombre and norm(nombre) in norm(persona.nombre):
+                matched = True
+                score += 50 if norm(persona.nombre) == norm(nombre) else 30
+        if apellido and apellido.strip():
+            if persona.apellido and norm(apellido) in norm(persona.apellido):
+                matched = True
+                score += 30 if norm(persona.apellido) == norm(apellido) else 20
+        return score if matched else None
+
+    def _texto_matches(self, *, estado, nombre, apellido, doc_numero) -> list[tuple]:
+        """Devuelve [(score, persona)] únicos por person_id, ordenados por score desc."""
+        mejor: dict[str, tuple[int, PersonaBase]] = {}
+        for p in self._personas:
+            if p.moderacion != "aprobada":
+                continue
+            if estado and p.estado.value != estado:
+                continue
+            score = self._texto_score(
+                p, nombre=nombre, apellido=apellido, doc_numero=doc_numero
+            )
+            if score is None:
+                continue
+            pid = str(p.person_id)
+            if pid not in mejor or score > mejor[pid][0]:
+                mejor[pid] = (score, p)
+        return sorted(mejor.values(), key=lambda t: -t[0])
+
+    def buscar_por_texto(
+        self,
+        *,
+        estado: str | None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        doc_numero: str | None = None,
+        limite: int,
+        offset: int = 0,
+    ) -> list[dict]:
+        if not any((v and v.strip()) for v in (nombre, apellido, doc_numero)):
+            return []
+        matches = self._texto_matches(
+            estado=estado, nombre=nombre, apellido=apellido, doc_numero=doc_numero
+        )
+        off = max(0, offset)
+        page = matches[off: off + max(1, limite)]
+        return [self._to_texto_dict(p, score) for score, p in page]
+
+    def count_por_texto(
+        self,
+        *,
+        estado: str | None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        doc_numero: str | None = None,
+    ) -> int:
+        if not any((v and v.strip()) for v in (nombre, apellido, doc_numero)):
+            return 0
+        return len(
+            self._texto_matches(
+                estado=estado, nombre=nombre, apellido=apellido, doc_numero=doc_numero
+            )
+        )
+
+    def _to_texto_dict(self, persona: PersonaBase, score: int) -> dict:
+        """Convierte PersonaBase en un dict con forma de CandidatoTexto."""
+        coincidencia = min(100, int(score))
+        if score >= 100:
+            tipo_match, confianza = "documento", "alta"
+        elif coincidencia >= 40:
+            tipo_match, confianza = "nombre", "media"
+        else:
+            tipo_match, confianza = "nombre", "baja"
+        return {
+            "person_id": str(persona.person_id),
+            "estado": persona.estado.value,
+            "es_menor": persona.es_menor,
+            "nombre": persona.nombre,
+            "apellido": persona.apellido,
+            "edad": persona.edad,
+            "refugio": persona.refugio,
+            "ubicacion": persona.ubicacion or persona.refugio,
+            "telefono": persona.telefono_responsable or persona.telefono_contacto,
+            "encontrado_por": persona.encontrado_por,
+            "descripcion": persona.descripcion,
+            "image_url": persona.photos[0] if persona.photos else "",
+            "coincidencia": coincidencia,
+            "confianza": confianza,
+            "tipo_match": tipo_match,
+        }
+
     def search_by_estado(
         self, embedding: Any, estado: str | None, limit: int, offset: int = 0
     ) -> list[dict]:
@@ -103,6 +216,12 @@ class FakePersonaRepository:
 
     def persona_exists(self, person_id: str) -> bool:
         return any(str(p.person_id) == person_id for p in self._personas)
+
+    def persona_visible(self, person_id: str) -> bool:
+        return any(
+            str(p.person_id) == person_id and p.moderacion == "aprobada"
+            for p in self._personas
+        )
 
     def get_persona_basics(self, person_id: str) -> dict | None:
         for p in self._personas:
@@ -243,31 +362,90 @@ class FakePersonaRepository:
             if p.moderacion == "aprobada" and (estado is None or p.estado.value == estado)
         })
 
-    def count_admin(self, estado: str | None = None, moderacion: str | None = None) -> int:
+    def count_admin(
+        self,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        person_id: str | None = None,
+        es_menor: bool | None = None,
+    ) -> int:
         return len({
             str(p.person_id)
             for p in self._personas
-            if (not estado or p.estado.value == estado)
-            and (not moderacion or p.moderacion == moderacion)
+            if self._matches_admin_filters(
+                p,
+                estado=estado,
+                moderacion=moderacion,
+                nombre=nombre,
+                apellido=apellido,
+                cedula=cedula,
+                person_id=person_id,
+                es_menor=es_menor,
+            )
         })
+
+    @staticmethod
+    def _contains(value: str | None, needle: str | None) -> bool:
+        return not needle or needle.strip().lower() in (value or "").lower()
+
+    def _matches_admin_filters(
+        self,
+        persona: PersonaBase,
+        *,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        person_id: str | None = None,
+        es_menor: bool | None = None,
+    ) -> bool:
+        if estado and persona.estado.value != estado:
+            return False
+        if moderacion and persona.moderacion != moderacion:
+            return False
+        if not self._contains(persona.nombre, nombre):
+            return False
+        if not self._contains(persona.apellido, apellido):
+            return False
+        if not self._contains(persona.doc_numero, cedula):
+            return False
+        if person_id and str(persona.person_id) != person_id.strip():
+            return False
+        if es_menor is not None and persona.es_menor is not es_menor:
+            return False
+        return True
 
     def get_busqueda_embedding(self, codigo: str) -> Any | None:
         """Return first stored fake embedding for a search code."""
         embeddings = self._embeddings.get(codigo)
         return embeddings[0] if embeddings else None
 
+    def count_search_admin(self, estado: str | None = None) -> int:
+        return len(
+            {
+                str(p.person_id)
+                for p in self._personas
+                if estado is None or p.estado.value == estado
+            }
+        )
+
     def search_admin(
-        self, embedding: Any, estado: str | None, limit: int
+        self, embedding: Any, estado: str | None, limit: int, offset: int = 0
     ) -> list[dict]:
         """Same as search_by_estado but no moderacion filter."""
         candidates = [
             p for p in self._personas if estado is None or p.estado.value == estado
         ]
         results = []
-        for i, persona in enumerate(candidates[:limit]):
+        for i, persona in enumerate(candidates):
             distancia = round(0.10 * (i + 1), 4)
             results.append(self._to_candidato_dict(persona, distancia))
-        return results
+        off = max(0, offset)
+        return results[off: off + limit]
 
     def list_admin(
         self,
@@ -275,13 +453,25 @@ class FakePersonaRepository:
         estado: str | None = None,
         moderacion: str | None = None,
         offset: int = 0,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        person_id: str | None = None,
+        es_menor: bool | None = None,
     ) -> list[dict]:
         """Return stored personas as PersonaAdmin-shaped dicts (paginado con offset)."""
         filtered = []
         for persona in self._personas:
-            if estado and persona.estado.value != estado:
-                continue
-            if moderacion and persona.moderacion != moderacion:
+            if not self._matches_admin_filters(
+                persona,
+                estado=estado,
+                moderacion=moderacion,
+                nombre=nombre,
+                apellido=apellido,
+                cedula=cedula,
+                person_id=person_id,
+                es_menor=es_menor,
+            ):
                 continue
             filtered.append(self._to_admin_dict(persona))
         return filtered[max(0, offset): max(0, offset) + limit]

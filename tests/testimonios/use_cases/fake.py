@@ -93,13 +93,13 @@ class FakeTestimonioRepository:
         ]
 
     def list_admin(
-        self, estado: str | None = None, limite: int = 100
+        self, estado: str | None = None, limite: int = 100, offset: int = 0
     ) -> list[dict]:
         results = self._testimonios
         if estado:
             results = [t for t in results if t["estado"] == estado]
         results = sorted(results, key=lambda t: t["created_at"], reverse=True)[
-            :limite
+            max(0, offset): max(0, offset) + limite
         ]
         return [
             {
@@ -120,6 +120,11 @@ class FakeTestimonioRepository:
             }
             for t in results
         ]
+
+    def count_admin(self, estado: str | None = None) -> int:
+        if estado:
+            return sum(1 for t in self._testimonios if t["estado"] == estado)
+        return len(self._testimonios)
 
     def get(self, id: UUID) -> dict | None:
         sid = str(id)

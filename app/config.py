@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     # Base de datos. Por defecto apunta al Postgres incluido en la imagen.
     database_url: str = "postgresql://rostros:rostros@localhost:5432/rostros"
 
+    # CORS: orígenes (front) autorizados a consumir la API desde el navegador.
+    # Lista separada por comas. Por ahora ABIERTO A TODOS ("*") para no bloquear
+    # ningún front mientras se integran los paneles. La auth admin va por header
+    # Bearer (no cookies), por eso `allow_credentials=False` es compatible con "*".
+    # Para restringir a producción: CORS_ORIGINS="https://vzlaencuentra.com,https://www.vzlaencuentra.com"
+    cors_origins: str = "*"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """`cors_origins` como lista, sin espacios ni entradas vacías."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
     @property
     def usa_spaces(self) -> bool:
         return bool(self.spaces_key and self.spaces_secret and self.spaces_bucket)
@@ -43,7 +55,7 @@ class Settings(BaseSettings):
     # `admins` desde env vars (ver main.lifespan). El login real valida SIEMPRE contra
     # la BD con hash bcrypt. Cambiá la password con `python -m app.cli change-password`.
     admin_user: str = "admin"
-    admin_password: str = "reencuentros2026"
+    admin_password: str = ""
 
     # JWT firmado para los endpoints de admin.
     # >>> JWT_SECRET DEBE estar setteado en producción (generá uno con

@@ -51,7 +51,13 @@ class TestimonioRepository:
             WHERE person_id = t.person_id ORDER BY created_at LIMIT 1
         ) p ON true
         {where}
-        ORDER BY t.created_at DESC LIMIT %s
+        ORDER BY t.created_at DESC LIMIT %s OFFSET %s
+    """
+
+    _COUNT_ADMIN = """
+        SELECT count(*)
+        FROM testimonios t
+        {where}
     """
 
     _GET_BY_ID = """
@@ -133,7 +139,7 @@ class TestimonioRepository:
         return [self._row_to_publico(r) for r in rows]
 
     def list_admin(
-        self, estado: str | None = None, limite: int = 100
+        self, estado: str | None = None, limite: int = 100, offset: int = 0
     ) -> list[dict]:
         """List testimonios for admin view, optionally filtered by estado."""
         conds, args = [], []
@@ -142,10 +148,23 @@ class TestimonioRepository:
             args.append(estado)
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         args.append(limite)
+        args.append(max(0, offset))
         sql = self._LIST_ADMIN.format(where=where)
         with self._pool.connection() as conn:
             rows = conn.execute(sql, tuple(args)).fetchall()
         return [self._row_to_admin(r) for r in rows]
+
+    def count_admin(self, estado: str | None = None) -> int:
+        """Count testimonios with the same filter as `list_admin`."""
+        conds, args = [], []
+        if estado in self._ESTADOS:
+            conds.append("t.estado = %s")
+            args.append(estado)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        sql = self._COUNT_ADMIN.format(where=where)
+        with self._pool.connection() as conn:
+            row = conn.execute(sql, tuple(args)).fetchone()
+        return int(row[0]) if row else 0
 
     def get(self, id: UUID) -> dict | None:
         with self._pool.connection() as conn:

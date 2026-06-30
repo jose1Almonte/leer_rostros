@@ -93,7 +93,15 @@ class PersonaRepository:
         JOIN personas p2 ON p2.id = b.foto_id
         WHERE b.rn = 1
         ORDER BY b.distancia ASC
-        LIMIT %s
+        LIMIT %s OFFSET %s
+    """
+
+    _COUNT_SEARCH_ADMIN = """
+        SELECT count(DISTINCT p.person_id)
+        FROM personas p
+        JOIN persona_embeddings pe ON pe.foto_id = p.id
+        WHERE 1 = 1
+            {estado_filter}
     """
 
     # Admin list: aggregation with moderation column
@@ -185,6 +193,11 @@ class PersonaRepository:
     # ¿Existe esa persona? (cualquier fila/foto con ese person_id)
     _PERSONA_EXISTS = "SELECT 1 FROM personas WHERE person_id = %s LIMIT 1"
 
+    # ¿Es VISIBLE? (al menos una fila aprobada). Para vistas públicas.
+    _PERSONA_VISIBLE = (
+        "SELECT 1 FROM personas WHERE person_id = %s AND moderacion = 'aprobada' LIMIT 1"
+    )
+
     # Datos base de una persona por su person_id (una fila por persona).
     _PERSONA_BASICS = """
         SELECT person_id, max(doc_numero), max(estado), max(nombre), max(apellido)
@@ -235,6 +248,35 @@ class PersonaRepository:
     """
 
     _COUNT_HISTORIAL = "SELECT count(*) FROM persona_historial WHERE person_id = %s"
+
+    # Búsqueda por TEXTO (sin imagen): una fila por persona (la de mayor score).
+    # {score_expr}, {where_match} y {estado_filter} se arman dinámicamente.
+    _SEARCH_TEXTO = """
+        SELECT person_id, estado, es_menor, nombre, apellido, edad, refugio, ubicacion,
+               telefono_responsable, telefono_contacto, descripcion, encontrado_por,
+               image_url, score
+        FROM (
+            SELECT DISTINCT ON (person_id)
+                   person_id, estado, es_menor, nombre, apellido, edad, refugio, ubicacion,
+                   telefono_responsable, telefono_contacto, descripcion, encontrado_por,
+                   image_url, ({score_expr}) AS score
+            FROM personas
+            WHERE moderacion = 'aprobada'
+                {estado_filter}
+                AND ({where_match})
+            ORDER BY person_id, ({score_expr}) DESC
+        ) t
+        ORDER BY t.score DESC, t.nombre ASC NULLS LAST
+        LIMIT %(limit)s OFFSET %(offset)s
+    """
+
+    _COUNT_TEXTO = """
+        SELECT count(DISTINCT person_id)
+        FROM personas
+        WHERE moderacion = 'aprobada'
+            {estado_filter}
+            AND ({where_match})
+    """
 
     def __init__(self, pool: ConnectionPool, policy: MatchingPolicy):
         self._pool = pool
@@ -294,6 +336,131 @@ class PersonaRepository:
                 conn.commit()
                 urls.append(url)
         return urls
+
+    def add_sin_imagen(self, person_id: UUID, persona: PersonaBase) -> None:
+        """Inserta UNA fila de persona SIN imagen ni embeddings (flujo solo-texto).
+
+        La búsqueda por rostro nunca la encontrará (no tiene embeddings); solo aparece
+        en la búsqueda por texto (`buscar_por_texto`). `image_url`/`image_key` van vacíos.
+        """
+        foto_id = uuid.uuid4()
+        datos = {
+            "estado": persona.estado.value,
+            "menor": persona.es_menor,
+            "nombre": persona.nombre,
+            "apellido": persona.apellido,
+            "edad": persona.edad,
+            "doc_tipo": persona.doc_tipo,
+            "doc_numero": persona.doc_numero,
+            "tel_contacto": persona.telefono_contacto,
+            "refugio": persona.refugio,
+            "tel_resp": persona.telefono_responsable,
+            "doc_resp": persona.doc_responsable,
+            "descripcion": persona.descripcion,
+            "ubicacion": persona.ubicacion,
+            "codigo": persona.codigo,
+            "encontrado_por": persona.encontrado_por,
+            "id": foto_id,
+            "pid": person_id,
+            "url": "",
+            "key": "",
+        }
+        with self._pool.connection() as conn:
+            conn.execute(self._INSERT_PERSONA, datos)
+            conn.commit()
+
+    def buscar_por_texto(
+        self,
+        *,
+        estado: str | None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        doc_numero: str | None = None,
+        limite: int,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Búsqueda por TEXTO (sin imagen) entre personas visibles (aprobadas).
+
+        Coincide por cédula (exacta), nombre y apellido (parcial, ILIKE). Cada persona
+        aparece UNA vez (la mejor fila). Devuelve dicts con forma de `CandidatoTexto`,
+        con `coincidencia` (0-100) calculada por la fuerza del match y `tipo_match`.
+        Ordena por coincidencia desc. Soporta paginación (limite/offset).
+        """
+        conds, score_parts, params = self._build_texto_filtros(
+            nombre=nombre, apellido=apellido, doc_numero=doc_numero
+        )
+        if not conds:
+            return []
+        params["estado"] = estado
+        params["limit"] = max(1, limite)
+        params["offset"] = max(0, offset)
+        estado_filter = "AND estado = %(estado)s" if estado else ""
+        sql = self._SEARCH_TEXTO.format(
+            score_expr=" + ".join(score_parts),
+            where_match=" OR ".join(conds),
+            estado_filter=estado_filter,
+        )
+        with self._pool.connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_texto_dict(r) for r in rows]
+
+    def count_por_texto(
+        self,
+        *,
+        estado: str | None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        doc_numero: str | None = None,
+    ) -> int:
+        """Cuenta personas únicas que matchean el texto (para la metadata de paginación)."""
+        conds, _score, params = self._build_texto_filtros(
+            nombre=nombre, apellido=apellido, doc_numero=doc_numero
+        )
+        if not conds:
+            return 0
+        params["estado"] = estado
+        estado_filter = "AND estado = %(estado)s" if estado else ""
+        sql = self._COUNT_TEXTO.format(
+            where_match=" OR ".join(conds), estado_filter=estado_filter
+        )
+        with self._pool.connection() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
+
+    @staticmethod
+    def _build_texto_filtros(
+        *,
+        nombre: str | None,
+        apellido: str | None,
+        doc_numero: str | None,
+    ) -> tuple[list[str], list[str], dict]:
+        """Construye condiciones WHERE (OR) y la expresión de score para la búsqueda textual."""
+        conds: list[str] = []
+        score_parts: list[str] = ["0"]
+        params: dict = {}
+        if doc_numero and doc_numero.strip():
+            params["doc"] = doc_numero.strip()
+            conds.append("lower(btrim(doc_numero)) = lower(btrim(%(doc)s))")
+            score_parts.append(
+                "CASE WHEN lower(btrim(doc_numero)) = lower(btrim(%(doc)s)) THEN 100 ELSE 0 END"
+            )
+        if nombre and nombre.strip():
+            params["nom"] = nombre.strip()
+            params["nom_like"] = f"%{nombre.strip()}%"
+            conds.append("nombre ILIKE %(nom_like)s")
+            score_parts.append(
+                "CASE WHEN lower(btrim(nombre)) = lower(btrim(%(nom)s)) THEN 50 "
+                "WHEN nombre ILIKE %(nom_like)s THEN 30 ELSE 0 END"
+            )
+        if apellido and apellido.strip():
+            params["ape"] = apellido.strip()
+            params["ape_like"] = f"%{apellido.strip()}%"
+            conds.append("apellido ILIKE %(ape_like)s")
+            score_parts.append(
+                "CASE WHEN lower(btrim(apellido)) = lower(btrim(%(ape)s)) THEN 30 "
+                "WHEN apellido ILIKE %(ape_like)s THEN 20 ELSE 0 END"
+            )
+        return conds, score_parts, params
 
     def search_by_estado(
         self, embedding: Any, estado: str | None, limit: int, offset: int = 0
@@ -379,6 +546,11 @@ class PersonaRepository:
         """True si existe alguna foto/fila con ese person_id."""
         with self._pool.connection() as conn:
             return conn.execute(self._PERSONA_EXISTS, (person_id,)).fetchone() is not None
+
+    def persona_visible(self, person_id: str) -> bool:
+        """True si la persona existe y está VISIBLE (moderacion='aprobada')."""
+        with self._pool.connection() as conn:
+            return conn.execute(self._PERSONA_VISIBLE, (person_id,)).fetchone() is not None
 
     def get_persona_basics(self, person_id: str) -> dict | None:
         """Datos base de una persona (doc/estado/nombre) o None si no existe."""
@@ -502,23 +674,78 @@ class PersonaRepository:
             return int(conn.execute(sql, params).fetchone()[0])
 
     def count_admin(
-        self, estado: str | None = None, moderacion: str | None = None
+        self,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        person_id: str | None = None,
+        es_menor: bool | None = None,
     ) -> int:
         """Cuenta personas únicas con los mismos filtros que `list_admin` (para meta)."""
-        conds, args = [], []
+        conds, args = self._build_admin_filters(
+            estado=estado,
+            moderacion=moderacion,
+            nombre=nombre,
+            apellido=apellido,
+            cedula=cedula,
+            person_id=person_id,
+            es_menor=es_menor,
+        )
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        sql = f"SELECT count(DISTINCT person_id) FROM personas {where}"
+        with self._pool.connection() as conn:
+            return int(conn.execute(sql, tuple(args)).fetchone()[0])
+
+    @staticmethod
+    def _build_admin_filters(
+        *,
+        estado: str | None = None,
+        moderacion: str | None = None,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        person_id: str | None = None,
+        es_menor: bool | None = None,
+    ) -> tuple[list[str], list[object]]:
+        """Build shared WHERE filters for admin personas list and count."""
+        conds: list[str] = []
+        args: list[object] = []
         if estado in ("buscada", "encontrada"):
             conds.append("estado = %s")
             args.append(estado)
         if moderacion in ("aprobada", "rechazada", "pendiente"):
             conds.append("moderacion = %s")
             args.append(moderacion)
-        where = ("WHERE " + " AND ".join(conds)) if conds else ""
-        sql = f"SELECT count(DISTINCT person_id) FROM personas {where}"
+        if nombre and nombre.strip():
+            conds.append("nombre ILIKE %s")
+            args.append(f"%{nombre.strip()}%")
+        if apellido and apellido.strip():
+            conds.append("apellido ILIKE %s")
+            args.append(f"%{apellido.strip()}%")
+        if cedula and cedula.strip():
+            conds.append("doc_numero ILIKE %s")
+            args.append(f"%{cedula.strip()}%")
+        if person_id and person_id.strip():
+            conds.append("person_id::text = %s")
+            args.append(person_id.strip())
+        if es_menor is not None:
+            conds.append("es_menor = %s")
+            args.append(es_menor)
+        return conds, args
+
+    def count_search_admin(self, estado: str | None = None) -> int:
+        """Count admin-searchable personas with embeddings for pagination metadata."""
+        estado_filter = "AND p.estado = %s" if estado else ""
+        params: tuple = (estado,) if estado_filter else ()
+        sql = self._COUNT_SEARCH_ADMIN.format(estado_filter=estado_filter)
         with self._pool.connection() as conn:
-            return int(conn.execute(sql, tuple(args)).fetchone()[0])
+            row = conn.execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
 
     def search_admin(
-        self, embedding: Any, estado: str | None, limit: int
+        self, embedding: Any, estado: str | None, limit: int, offset: int = 0
     ) -> list[dict]:
         """Admin search: same as search_by_estado but NO moderacion filter.
 
@@ -529,7 +756,7 @@ class PersonaRepository:
         params: tuple = (embedding, embedding)
         if estado:
             params = params + (estado,)
-        params = params + (limit,)
+        params = params + (limit, max(0, offset))
         sql = self._SEARCH_ADMIN.format(cols=cols, estado_filter=estado_filter)
         with self._pool.connection() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -541,19 +768,26 @@ class PersonaRepository:
         estado: str | None = None,
         moderacion: str | None = None,
         offset: int = 0,
+        nombre: str | None = None,
+        apellido: str | None = None,
+        cedula: str | None = None,
+        person_id: str | None = None,
+        es_menor: bool | None = None,
     ) -> list[dict]:
         """List personas for admin view, with optional estado/moderacion filters.
 
         Soporta paginación con `offset`. Returns list of PersonaAdmin-shaped dicts.
         Does NOT apply privacy masking.
         """
-        conds, args = [], []
-        if estado in ("buscada", "encontrada"):
-            conds.append("estado = %s")
-            args.append(estado)
-        if moderacion in ("aprobada", "rechazada", "pendiente"):
-            conds.append("moderacion = %s")
-            args.append(moderacion)
+        conds, args = self._build_admin_filters(
+            estado=estado,
+            moderacion=moderacion,
+            nombre=nombre,
+            apellido=apellido,
+            cedula=cedula,
+            person_id=person_id,
+            es_menor=es_menor,
+        )
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         args.append(limit)
         args.append(max(0, offset))
@@ -642,6 +876,50 @@ class PersonaRepository:
             "distancia": round(d, 4),
             "coincidencia": self._policy.match_percentage(d),
             "confianza": self._policy.confidence_band(d),
+        }
+
+    @staticmethod
+    def _row_to_texto_dict(row: tuple) -> dict:
+        """Convierte una fila de la búsqueda por texto en un dict `CandidatoTexto`."""
+        (
+            person_id,
+            estado,
+            es_menor,
+            nombre,
+            apellido,
+            edad,
+            refugio,
+            ubicacion,
+            tel_resp,
+            tel_contacto,
+            descripcion,
+            encontrado_por,
+            image_url,
+            score,
+        ) = row
+        coincidencia = min(100, int(score))
+        if score >= 100:
+            tipo_match, confianza = "documento", "alta"
+        elif coincidencia >= 40:
+            tipo_match, confianza = "nombre", "media"
+        else:
+            tipo_match, confianza = "nombre", "baja"
+        return {
+            "person_id": str(person_id),
+            "estado": estado,
+            "es_menor": bool(es_menor),
+            "nombre": nombre,
+            "apellido": apellido,
+            "edad": edad,
+            "refugio": refugio,
+            "ubicacion": ubicacion or refugio,
+            "telefono": tel_resp or tel_contacto,
+            "encontrado_por": encontrado_por,
+            "descripcion": descripcion,
+            "image_url": image_url or "",
+            "coincidencia": coincidencia,
+            "confianza": confianza,
+            "tipo_match": tipo_match,
         }
 
     def _historial_row_to_dict(self, row: tuple) -> dict:

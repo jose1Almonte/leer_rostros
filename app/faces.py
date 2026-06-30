@@ -15,22 +15,32 @@ from insightface.app import FaceAnalysis
 
 from app.config import get_settings
 
-_face_app: FaceAnalysis | None = None
+# Tamaños de detección, en orden. RetinaFace es sensible a la escala: con un solo
+# det_size grande (640) se PIERDEN las caras que llenan el cuadro (retratos recortados,
+# selfies) porque, al ajustar la imagen a 640, la cara queda más grande que los anchors.
+# Probamos 640 (bueno para caras pequeñas en fotos grandes) y, si no detecta, 320
+# (recupera las caras grandes). Cubre ambos casos sin pedir otra foto al usuario.
+DET_SIZES: tuple[tuple[int, int], ...] = ((640, 640), (320, 320))
+
+# Una FaceAnalysis por det_size (cacheada). Solo cargamos detección+reconocimiento:
+# no usamos edad/género ni landmarks 3D, así cada app pesa menos en RAM.
+_apps: dict[tuple[int, int], FaceAnalysis] = {}
 
 
-def _get_app() -> FaceAnalysis:
-    global _face_app
-    if _face_app is None:
+def _get_app(det_size: tuple[int, int] = (640, 640)) -> FaceAnalysis:
+    app = _apps.get(det_size)
+    if app is None:
         # `root` define dónde se cachean los pesos de buffalo_l. INSIGHTFACE_HOME
         # permite apuntarlo a un volumen persistente (evita re-descargar ~300 MB).
-        _face_app = FaceAnalysis(
+        app = FaceAnalysis(
             name="buffalo_l",
             root=os.environ.get("INSIGHTFACE_HOME", "~/.insightface"),
             providers=["CPUExecutionProvider"],
+            allowed_modules=["detection", "recognition"],
         )
-        # det_size=(640,640): balance entre precisión de detección y velocidad en CPU.
-        _face_app.prepare(ctx_id=0, det_size=(640, 640))
-    return _face_app
+        app.prepare(ctx_id=0, det_size=det_size)
+        _apps[det_size] = app
+    return app
 
 
 def _decode_and_resize(data: bytes) -> np.ndarray:
@@ -49,9 +59,16 @@ def _decode_and_resize(data: bytes) -> np.ndarray:
 
 
 def _best_face(img: np.ndarray, min_quality: float) -> tuple[np.ndarray, float]:
-    """Detecta el mejor rostro en la imagen BGR y devuelve (embedding_512dim, det_score)."""
-    app = _get_app()
-    detected = app.get(img)
+    """Detecta el mejor rostro en la imagen BGR y devuelve (embedding_512dim, det_score).
+
+    Detección multi-escala: prueba cada det_size de `DET_SIZES` y se queda con la
+    primera que encuentre algún rostro. Así no se pierden ni las caras pequeñas en
+    fotos grandes (640) ni las que llenan el cuadro (320)."""
+    detected = []
+    for det_size in DET_SIZES:
+        detected = _get_app(det_size).get(img)
+        if detected:
+            break
     if not detected:
         raise ValueError("No se detectó ningún rostro en la imagen.")
     face = max(detected, key=lambda f: f.det_score)
@@ -119,9 +136,10 @@ def distance_to_confidence(distance: float) -> float:
 
 
 def warmup() -> None:
-    """Pre-carga el modelo y el detector para evitar el cold start en la 1ª petición."""
+    """Pre-carga los modelos y detectores (todas las escalas) para evitar el cold start."""
     dummy = np.zeros((320, 320, 3), dtype=np.uint8)
-    try:
-        _get_app().get(dummy)
-    except Exception:
-        pass
+    for det_size in DET_SIZES:
+        try:
+            _get_app(det_size).get(dummy)
+        except Exception:
+            pass

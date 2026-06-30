@@ -4,8 +4,8 @@ from typing import Any
 
 from app.domain.privacy import MenoresPrivacy
 from app.personas.repositories.persona import PersonaRepository
-from app.schemas import Candidato
-from app.shared._helpers import LIMITE_MAX
+from app.schemas import Candidato, PageMeta, PaginaCandidatos
+from app.shared._helpers import construir_meta, normaliza_paginacion
 
 
 class BuscarAdmin:
@@ -20,17 +20,15 @@ class BuscarAdmin:
         embedding: Any,
         estado: str | None,
         limite: int,
-    ) -> list[Candidato]:
-        """Search the database for matching candidates (no moderation filter).
-
-        Args:
-            embedding: Query embedding vector (from faces.embedding_from_bytes).
-            estado: Optional filter ("buscada" or "encontrada").
-            limite: Maximum results (clamped to 1–50).
-
-        Returns:
-            List of Candidato with privacy masking applied.
-        """
-        limite = max(1, min(LIMITE_MAX, limite))
-        results = self._repo.search_admin(embedding, estado, limite)
-        return [MenoresPrivacy(Candidato(**d)) for d in results]
+        offset: int = 0,
+        page: int | None = None,
+    ) -> PaginaCandidatos:
+        """Search the database for matching candidates without moderation filtering."""
+        limite, offset = normaliza_paginacion(limite, offset, page)
+        results = self._repo.search_admin(embedding, estado, limite, offset=offset)
+        total = self._repo.count_search_admin(estado)
+        data = [MenoresPrivacy(Candidato(**d)) for d in results]
+        return PaginaCandidatos(
+            data=data,
+            meta=PageMeta(**construir_meta(total, limite, offset)),
+        )

@@ -12,6 +12,8 @@ Modelo de datos:
   - 'encontrada' -> la registró un RESCATISTA que halló a alguien.
 """
 
+import os
+
 import psycopg
 from pgvector.psycopg import register_vector
 from psycopg_pool import ConnectionPool
@@ -40,6 +42,9 @@ _EXTRA_COLS = [
     ("encontrado_por", "TEXT"),  # nombre de quien encontró a la persona
     # Moderación: 'aprobada' (visible) | 'rechazada' (oculta) | 'pendiente'.
     ("moderacion", "TEXT NOT NULL DEFAULT 'aprobada'"),
+    # Lote de origen de una carga masiva (para identificar/limpiar después un set de datos).
+    # Ej.: 'valid_personas_json' marca los registros importados desde ese JSON.
+    ("lote_origen", "TEXT"),
 ]
 
 
@@ -100,17 +105,44 @@ def init_db() -> None:
         conn.execute("ALTER TABLE personas DROP COLUMN IF EXISTS embedding")
 
         # --- Tabla de embeddings: N vectores por foto (base + rotaciones ±15°). ---
+        # Migración controlada: solo recrea la tabla si ALLOW_VECTOR_REBUILD=1 y la
+        # dimensión real de pgvector no coincide con embedding_dim. La dimensión se
+        # lee desde pg_attribute (no de information_schema, que retorna NULL para
+        # tipos vector). Sin la env var, crea la tabla si no existe (inocuo).
+        _rebuild = os.environ.get("ALLOW_VECTOR_REBUILD", "") == "1"
+        _embedding_col_type = f"vector({s.embedding_dim})"
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS persona_embeddings (
                 id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 foto_id        UUID NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
-                embedding      vector({s.embedding_dim}) NOT NULL,
+                embedding      {_embedding_col_type} NOT NULL,
                 calidad_rostro FLOAT NOT NULL DEFAULT 1.0,
                 created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
             )
             """
         )
+        if _rebuild:
+            _dim_row = conn.execute(
+                "SELECT atttypmod FROM pg_attribute "
+                "WHERE attrelid = 'persona_embeddings'::regclass "
+                "AND attname = 'embedding' AND attnum > 0"
+            ).fetchone()
+            if _dim_row is not None:
+                _current_dim = _dim_row[0]
+                if _current_dim != s.embedding_dim:
+                    conn.execute("DROP TABLE IF EXISTS persona_embeddings CASCADE")
+                    conn.execute(
+                        f"""
+                        CREATE TABLE IF NOT EXISTS persona_embeddings (
+                            id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            foto_id        UUID NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
+                            embedding      {_embedding_col_type} NOT NULL,
+                            calidad_rostro FLOAT NOT NULL DEFAULT 1.0,
+                            created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+                        )
+                        """
+                    )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS persona_embeddings_foto_idx "
             "ON persona_embeddings (foto_id)"
