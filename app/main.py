@@ -35,6 +35,7 @@ from app.testimonios.repositories.testimonio import TestimonioRepository
 from app.testimonios.use_cases import (
     EliminarTestimonio,
     ListarTestimoniosAdmin,
+    ListarTestimoniosAprobados,
     ListarTestimoniosPublico,
     ModerarTestimonio,
     RegistrarTestimonio,
@@ -423,6 +424,7 @@ app = FastAPI(
     version="2.1.0",
     openapi_tags=tags,
     lifespan=lifespan,
+    swagger_ui_parameters={"persistAuthorization": True},
 )
 
 # CORS: por ahora ABIERTO A TODOS (cors_origins="*" por defecto). Ajustable a una
@@ -1344,6 +1346,17 @@ async def registrar_testimonio(
 def listar_testimonios_publico(person_id: str):
     use_case = ListarTestimoniosPublico(get_testimonio_repo())
     return _use_case_execute(use_case.execute, person_id=person_id)
+
+
+@app.get(
+    "/testimonios",
+    response_model=list[TestimonioPublico],
+    tags=["testimonios"],
+    summary="Lista pública de todos los testimonios aprobados (sin filtro por persona)",
+)
+def listar_testimonios_aprobados(limite: int = Query(50, ge=1, le=200)):
+    use_case = ListarTestimoniosAprobados(get_testimonio_repo())
+    return _use_case_execute(use_case.execute, limite=limite)
 
 
 @app.get(
