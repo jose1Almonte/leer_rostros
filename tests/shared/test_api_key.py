@@ -6,8 +6,9 @@ from app.config import get_settings
 
 
 class DummyRequest:
-    def __init__(self, path: str):
+    def __init__(self, path: str, root_path: str = ""):
         self.url = URL(f"http://testserver{path}")
+        self.scope = {"root_path": root_path}
 
 
 def test_exempt_paths():
@@ -24,6 +25,23 @@ def test_exempt_paths():
         # Even if API key is missing or invalid, it should be accepted/bypassed
         assert verify_api_key(req, api_key=None) is None
         assert verify_api_key(req, api_key="invalid") == "invalid"
+
+
+def test_exempt_paths_con_root_path(monkeypatch):
+    # Tras nginx con --root-path /api, el path llega como /api/health, /api/admin/...
+    # y aun así debe quedar exento. Con keys configuradas, para asegurar que la
+    # exención corre ANTES del chequeo de key.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "api_keys", "key1")
+    for path in ["/api/health", "/api/admin/personas", "/api/docs", "/api/openapi.json"]:
+        req = DummyRequest(path, root_path="/api")
+        assert verify_api_key(req, api_key=None) is None
+
+    # Un endpoint público SÍ debe exigir key aun con prefijo /api.
+    req = DummyRequest("/api/buscados", root_path="/api")
+    with pytest.raises(HTTPException):
+        verify_api_key(req, api_key=None)
+    assert verify_api_key(req, api_key="key1") == "key1"
 
 
 def test_sin_keys_configuradas_no_bloquea():
