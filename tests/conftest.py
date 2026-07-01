@@ -52,14 +52,18 @@ def client(admin):
     Does NOT start lifespan (no DB/DeepFace boot).
     Override get_current_admin to return a dummy Admin.
     """
-    from app.auth import get_current_admin
+    from app.auth import get_current_admin, verify_api_key
     from app.main import app
 
     # Override the auth dependency
     async def override_get_current_admin():
         return admin
 
+    async def override_verify_api_key():
+        return "fake-api-key"
+
     app.dependency_overrides[get_current_admin] = override_get_current_admin
+    app.dependency_overrides[verify_api_key] = override_verify_api_key
 
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
