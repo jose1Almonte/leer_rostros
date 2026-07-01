@@ -26,7 +26,19 @@ def test_exempt_paths():
         assert verify_api_key(req, api_key="invalid") == "invalid"
 
 
-def test_missing_api_key():
+def test_sin_keys_configuradas_no_bloquea():
+    # OPT-IN: si API_KEYS está vacío (default), NO se exige key en endpoints públicos.
+    settings = get_settings()
+    assert settings.api_keys_list == []  # default
+    req = DummyRequest("/buscados")
+    assert verify_api_key(req, api_key=None) is None
+    assert verify_api_key(req, api_key="cualquiera") == "cualquiera"
+
+
+def test_missing_api_key_cuando_hay_keys(monkeypatch):
+    # Con keys configuradas, un público sin header X-API-Key -> 403.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "api_keys", "key1,key2")
     req = DummyRequest("/buscados")
     with pytest.raises(HTTPException) as exc_info:
         verify_api_key(req, api_key=None)

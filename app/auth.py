@@ -200,14 +200,22 @@ def verify_api_key(
     if path in exempt_paths or path.startswith("/admin/"):
         return api_key
 
+    settings = get_settings()
+    keys = settings.api_keys_list
+    # OPT-IN: si no hay API keys configuradas (API_KEYS vacío), la protección está
+    # DESACTIVADA y no se bloquea nada. Así el default no rompe el acceso público;
+    # la protección se activa SOLO al definir API_KEYS en el entorno (y cuando el
+    # front ya envíe el header X-API-Key).
+    if not keys:
+        return api_key
+
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="API Key missing from header."
         )
 
-    settings = get_settings()
-    if api_key not in settings.api_keys_list:
+    if api_key not in keys:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid API Key."
