@@ -25,11 +25,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://rostros:rostros@localhost:5432/rostros"
 
     # CORS: orígenes (front) autorizados a consumir la API desde el navegador.
-    # Lista separada por comas. Por ahora ABIERTO A TODOS ("*") para no bloquear
-    # ningún front mientras se integran los paneles. La auth admin va por header
-    # Bearer (no cookies), por eso `allow_credentials=False` es compatible con "*".
-    # Para restringir a producción: CORS_ORIGINS="https://vzlaencuentra.com,https://www.vzlaencuentra.com"
-    cors_origins: str = "*"
+    # Lista separada por comas. En desarrollo incluir http://localhost.
+    # La auth admin va por header Bearer (no cookies), por eso allow_credentials=False.
+    cors_origins: str = "http://localhost,https://vzlaencuentra.com,https://www.vzlaencuentra.com"
 
     @property
     def cors_origins_list(self) -> list[str]:
