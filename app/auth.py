@@ -194,7 +194,13 @@ def verify_api_key(
 
     Exempts health check, Swagger UI docs, and admin endpoints.
     """
+    # El app corre tras nginx con `--root-path /api`, así que request.url.path incluye
+    # el prefijo (/api/health, /api/admin/...). Lo quitamos para chequear exenciones.
     path = request.url.path
+    root = request.scope.get("root_path", "")
+    if root and path.startswith(root):
+        path = path[len(root):] or "/"
+
     exempt_paths = {"/health", "/admin/login", "/docs", "/redoc", "/openapi.json"}
 
     if path in exempt_paths or path.startswith("/admin/"):
