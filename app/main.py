@@ -25,6 +25,7 @@ from app.auth import (
     hash_password,
     touch_last_login,
     verify_password,
+    verify_api_key,
 )
 from app.config import get_settings
 from app.database import close_pool, get_pool, init_db
@@ -425,6 +426,7 @@ app = FastAPI(
     openapi_tags=tags,
     lifespan=lifespan,
     swagger_ui_parameters={"persistAuthorization": True},
+    dependencies=[Depends(verify_api_key)],
 )
 
 # CORS: RESTRINGIDO a los orígenes de producción (config.cors_origins). Ajustable con
