@@ -18,8 +18,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Security, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security.api_key import APIKeyHeader
 from passlib.context import CryptContext
 
 from app.config import get_settings
@@ -179,3 +180,45 @@ def get_current_admin(
     if not admin.is_active:
         raise HTTPException(403, "Cuenta desactivada.")
     return admin
+
+
+API_KEY_NAME = "X-API-Key"
+_api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+
+def verify_api_key(
+    request: Request,
+    api_key: str | None = Security(_api_key_header),
+) -> str | None:
+    """Dependency to verify the presence and validity of the API Key for public endpoints.
+
+    Exempts health check, Swagger UI docs, and admin endpoints.
+    """
+    path = request.url.path
+    exempt_paths = {"/health", "/admin/login", "/docs", "/redoc", "/openapi.json"}
+
+    if path in exempt_paths or path.startswith("/admin/"):
+        return api_key
+
+    settings = get_settings()
+    keys = settings.api_keys_list
+    # OPT-IN: si no hay API keys configuradas (API_KEYS vacío), la protección está
+    # DESACTIVADA y no se bloquea nada. Así el default no rompe el acceso público;
+    # la protección se activa SOLO al definir API_KEYS en el entorno (y cuando el
+    # front ya envíe el header X-API-Key).
+    if not keys:
+        return api_key
+
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API Key missing from header."
+        )
+
+    if api_key not in keys:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid API Key."
+        )
+
+    return api_key

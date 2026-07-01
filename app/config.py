@@ -39,6 +39,11 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
+    def api_keys_list(self) -> list[str]:
+        """`api_keys` como lista, sin espacios ni entradas vacías."""
+        return [k.strip() for k in self.api_keys.split(",") if k.strip()]
+
+    @property
     def usa_spaces(self) -> bool:
         return bool(self.spaces_key and self.spaces_secret and self.spaces_bucket)
 
@@ -66,6 +71,9 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expires_minutes: int = 60
+
+    # API Keys para proteger los endpoints públicos (lista separada por comas).
+    api_keys: str = ""
 
     @property
     def endpoint_url(self) -> str:
