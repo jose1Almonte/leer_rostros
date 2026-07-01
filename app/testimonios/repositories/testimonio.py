@@ -27,10 +27,18 @@ class TestimonioRepository:
     """
 
     _SELECT_BY_PERSON = """
-        SELECT id, tipo, archivo_url, mensaje, nombre_testigo, created_at
+        SELECT id, person_id, tipo, archivo_url, mensaje, nombre_testigo, created_at
         FROM testimonios
         WHERE person_id = %s AND estado = 'aprobada'
         ORDER BY created_at DESC
+    """
+
+    _SELECT_ALL_APROBADOS = """
+        SELECT id, person_id, tipo, archivo_url, mensaje, nombre_testigo, created_at
+        FROM testimonios
+        WHERE estado = 'aprobada'
+        ORDER BY created_at DESC
+        LIMIT %s
     """
 
     _LIST_ADMIN = """
@@ -124,6 +132,12 @@ class TestimonioRepository:
             rows = conn.execute(self._SELECT_BY_PERSON, (person_id,)).fetchall()
         return [self._row_to_publico(r) for r in rows]
 
+    def list_all_aprobados(self, limite: int = 50) -> list[dict]:
+        """Return all approved testimonios, newest first, with person_id."""
+        with self._pool.connection() as conn:
+            rows = conn.execute(self._SELECT_ALL_APROBADOS, (limite,)).fetchall()
+        return [self._row_to_publico(r) for r in rows]
+
     def list_admin(
         self, estado: str | None = None, limite: int = 100, offset: int = 0
     ) -> list[dict]:
@@ -187,11 +201,12 @@ class TestimonioRepository:
     def _row_to_publico(row: tuple) -> dict:
         return {
             "id": str(row[0]),
-            "tipo": row[1],
-            "archivo_url": row[2],
-            "mensaje": row[3],
-            "nombre_testigo": row[4],
-            "created_at": row[5],
+            "person_id": str(row[1]) if row[1] else None,
+            "tipo": row[2],
+            "archivo_url": row[3],
+            "mensaje": row[4],
+            "nombre_testigo": row[5],
+            "created_at": row[6],
         }
 
     @staticmethod

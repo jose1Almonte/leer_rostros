@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class LoginBody(BaseModel):
     usuario: str = Field("admin", examples=["admin"])
-    password: str = Field(..., examples=["reencuentros2026"])
+    password: str = Field(..., examples=["mi_contraseña_segura"])
 
 
 class LoginResp(BaseModel):
@@ -74,6 +74,70 @@ class ResultadoVerificacion(BaseModel):
         description="Familiares con una búsqueda activa que coincide con esta persona, "
         "ordenados por parecido (mayor primero). Su `telefono` es el contacto del familiar.",
     )
+    meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
+
+
+# ----------------------- FLUJO SIN IMAGEN (solo texto) -----------------------
+
+
+class CandidatoTexto(BaseModel):
+    """Candidato de la búsqueda por TEXTO (sin imagen): coincidencia por datos, no por rostro."""
+
+    person_id: str
+    estado: str = Field(..., description="'buscada' o 'encontrada'.")
+    es_menor: bool = False
+    nombre: str | None = Field(None, description="Oculto si es menor y la coincidencia es baja (<20%).")
+    apellido: str | None = None
+    edad: str | None = None
+    refugio: str | None = None
+    ubicacion: str | None = None
+    telefono: str | None = Field(None, description="Teléfono de contacto para el reencuentro.")
+    encontrado_por: str | None = None
+    descripcion: str | None = None
+    image_url: str = Field("", description="Vacío en registros sin imagen.")
+    coincidencia: int = Field(..., description="Fuerza del match de texto (0-100).")
+    confianza: str = Field(..., description="'alta' (cédula exacta) | 'media' | 'baja'.")
+    tipo_match: str = Field(..., description="'documento' (cédula exacta) o 'nombre'.")
+
+
+class RegistroSinImagenIn(BaseModel):
+    """Datos de una persona para registrar SIN imagen (buscada o encontrada).
+
+    Validación: indicá al menos `nombre` o `doc_numero`. El resto es opcional.
+    """
+
+    nombre: str | None = Field(None, max_length=120, examples=["María"])
+    apellido: str | None = Field(None, max_length=120, examples=["Pérez"])
+    edad: str | None = Field(None, max_length=20, examples=["34"])
+    es_menor: bool = Field(False, description="Marca de menor (enmascara el nombre si la coincidencia es baja).")
+    doc_tipo: str | None = Field(None, max_length=40, examples=["V"])
+    doc_numero: str | None = Field(None, max_length=40, description="Cédula/identificación.", examples=["12345678"])
+    telefono_contacto: str | None = Field(None, max_length=120, description="Contacto del familiar (flujo buscado).")
+    refugio: str | None = Field(None, max_length=300, description="Refugio donde se encuentra (flujo encontrado).")
+    ubicacion: str | None = Field(None, max_length=300, description="Última ubicación conocida / dónde se la vio.")
+    telefono_responsable: str | None = Field(None, max_length=120, description="Contacto del responsable (flujo encontrado).")
+    doc_responsable: str | None = Field(None, max_length=60)
+    encontrado_por: str | None = Field(None, max_length=160, description="Quién la encontró/reporta.")
+    descripcion: str | None = Field(None, max_length=2000, description="Descripción física / notas.")
+
+
+class ResultadoBusquedaSinImagen(BaseModel):
+    """Respuesta al registrar SIN imagen: el código + coincidencias por texto + paginación."""
+
+    codigo: str = Field(..., description="Código del registro generado.")
+    person_id: str
+    total: int = Field(..., description="Coincidencias por texto en ESTA página.")
+    coincidencias: list[CandidatoTexto] = Field(
+        ..., description="Personas del lado opuesto que coinciden por texto (cédula/nombre)."
+    )
+    meta: PageMeta
+
+
+class ResultadoBusquedaTexto(BaseModel):
+    """Respuesta de la búsqueda por TEXTO autónoma (no registra nada)."""
+
+    total: int = Field(..., description="Coincidencias por texto en ESTA página.")
+    coincidencias: list[CandidatoTexto]
     meta: PageMeta = Field(..., description="Paginación: total real, página actual y total de páginas.")
 
 
@@ -343,6 +407,7 @@ class TestimonioCreado(BaseModel):
 
 class TestimonioPublico(BaseModel):
     id: str
+    person_id: str | None = None
     tipo: str
     archivo_url: str
     mensaje: str | None = None
