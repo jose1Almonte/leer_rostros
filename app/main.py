@@ -418,8 +418,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS: restringido a orígenes conocidos (producción + local dev).
-# Ver `cors_origins` en config.py. Ajustable con CORS_ORIGINS en .env.
+# CORS: por ahora ABIERTO A TODOS (cors_origins="*" por defecto). Ajustable a una
+# lista restringida con CORS_ORIGINS en el .env cuando se quiera cerrar.
 # La auth admin va por header Bearer (JWT), por eso allow_credentials=False.
 # Nota: CORS lo aplica el NAVEGADOR; no bloquea clientes server-to-server (curl, etc.).
 _cors_origins = get_settings().cors_origins_list
