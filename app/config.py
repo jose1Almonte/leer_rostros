@@ -25,11 +25,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://rostros:rostros@localhost:5432/rostros"
 
     # CORS: orígenes (front) autorizados a consumir la API desde el navegador.
-    # Lista separada por comas. Por ahora ABIERTO A TODOS ("*") para no bloquear
-    # ningún front mientras se integran los paneles. La auth admin va por header
-    # Bearer (no cookies), por eso `allow_credentials=False` es compatible con "*".
-    # Para restringir a producción: CORS_ORIGINS="https://vzlaencuentra.com,https://www.vzlaencuentra.com"
-    cors_origins: str = "*"
+    # Lista separada por comas. RESTRINGIDO a los fronts de producción (con y sin www)
+    # más el panel de admin. Para abrir a todos en desarrollo: CORS_ORIGINS="*".
+    # Para agregar un entorno local: CORS_ORIGINS="https://vzlaencuentra.com,http://localhost:5173"
+    cors_origins: str = (
+        "https://vzlaencuentra.com,https://www.vzlaencuentra.com,"
+        "https://admin-personas-private.netlify.app"
+    )
 
     @property
     def cors_origins_list(self) -> list[str]:

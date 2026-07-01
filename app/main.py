@@ -427,8 +427,8 @@ app = FastAPI(
     swagger_ui_parameters={"persistAuthorization": True},
 )
 
-# CORS: por ahora ABIERTO A TODOS (cors_origins="*" por defecto). Ajustable a una
-# lista restringida con CORS_ORIGINS en el .env cuando se quiera cerrar.
+# CORS: RESTRINGIDO a los orígenes de producción (config.cors_origins). Ajustable con
+# CORS_ORIGINS en el .env (usar "*" solo en desarrollo).
 # La auth admin va por header Bearer (JWT), por eso allow_credentials=False.
 # Nota: CORS lo aplica el NAVEGADOR; no bloquea clientes server-to-server (curl, etc.).
 _cors_origins = get_settings().cors_origins_list
